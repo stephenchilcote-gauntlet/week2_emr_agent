@@ -1,0 +1,85 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: openemr
+      MYSQL_USER: openemr
+      MYSQL_PASSWORD: openemr
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/seed_data.sql:/docker-entrypoint-initdb.d/99-seed.sql
+    ports:
+      - "3306:3306"
+    networks:
+      - emr-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  openemr:
+    image: openemr/openemr:7.0.2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_ROOT_PASS: root
+      MYSQL_USER: openemr
+      MYSQL_PASS: openemr
+      OE_USER: admin
+      OE_PASS: pass
+      MANUAL_SETUP: 0
+    volumes:
+      - openemr_sites:/var/www/localhost/htdocs/openemr/sites
+      - openemr_logs:/var/log
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - emr-net
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      OPENEMR_BASE_URL: http://openemr:80
+      OPENEMR_FHIR_URL: http://openemr:80/apis/default/fhir
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    depends_on:
+      - openemr
+    networks:
+      - emr-net
+
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    restart: unless-stopped
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks:
+      - emr-net
+
+networks:
+  emr-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  openemr_sites:
+  openemr_logs:

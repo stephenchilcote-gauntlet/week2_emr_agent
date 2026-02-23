@@ -1,0 +1,217 @@
+# OpenEMR Clinical AI Agent
+
+An AI-powered clinical workflow assistant embedded in OpenEMR. The agent reads patient records via FHIR R4, reasons about clinical tasks, and proposes changes through a **plan-then-confirm** workflow — no writes execute without clinician approval.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│  FastAPI Backend (port 8000)                     │
+│  ┌──────────────┐  ┌──────────────────────────┐  │
+│  │  Agent Loop   │  │  Verification Layer      │  │
+│  │  (Claude LLM) │  │  • Grounding checks      │  │
+│  │               │──│  • ICD-10/CPT validation  │  │
+│  │  Plan → Review│  │  • Confidence gating      │  │
+│  │  → Execute    │  │  • Conflict detection     │  │
+│  └──────┬───────┘  └──────────────────────────┘  │
+│         │                                        │
+│  ┌──────┴───────┐  ┌──────────────────────────┐  │
+│  │  Tool Layer   │  │  Observability (OTEL)    │  │
+│  │  • fhir_read  │  │  → Jaeger (port 16686)   │  │
+│  │  • fhir_write │  └──────────────────────────┘  │
+│  │  • openemr_api│                               │
+│  │  • page_ctx   │                               │
+│  │  • manifest   │                               │
+│  └──────┬───────┘                                │
+└─────────┼───────────────────────────────────────┘
+          │
+  ┌───────┴────────┐
+  │  OpenEMR 7.0.2 │
+  │  FHIR R4 API   │
+  │  (port 80/443) │
+  └───────┬────────┘
+          │
+  ┌───────┴────────┐
+  │  MySQL 8.0     │
+  │  (port 3306)   │
+  └────────────────┘
+```
+
+### Workflow
+
+1. Clinician sends a natural-language request via `/api/chat`
+2. Agent reads relevant FHIR resources (conditions, medications, labs, etc.)
+3. Agent builds a **change manifest** with every proposed write, each citing its source FHIR resource
+4. Verification layer checks grounding, code validity, confidence, and conflicts
+5. Clinician reviews and approves/rejects items via `/api/manifest/{id}/approve`
+6. Approved items execute sequentially through the OpenEMR API
+
+### Tools
+
+| Tool | Purpose |
+|------|---------|
+| `fhir_read` | Read FHIR resources (Patient, Condition, Observation, etc.) |
+| `fhir_write` | Write FHIR resources (requires manifest approval) |
+| `openemr_api` | Call OpenEMR REST endpoints not covered by FHIR |
+| `get_page_context` | Get current UI context (active patient, encounter, page) |
+| `submit_manifest` | Submit a change manifest for clinician review |
+
+## Setup
+
+### Prerequisites
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/) package manager
+- Docker & Docker Compose
+- Anthropic API key
+
+### Install Dependencies
+
+```bash
+uv sync
+```
+
+### Environment
+
+```bash
+cp .env.example .env
+# Edit .env and set ANTHROPIC_API_KEY
+```
+
+### Start Services
+
+```bash
+# Start Docker if not running
+sudo systemctl start docker
+
+# Bring up OpenEMR + MySQL + Jaeger
+docker compose up -d
+
+# Wait for OpenEMR to initialize (~60s on first boot)
+# Check: curl http://localhost/apis/default/fhir/metadata
+
+# Start the agent backend
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Verify
+
+```bash
+# Health check
+curl http://localhost:8000/api/health
+
+# FHIR metadata
+curl http://localhost:8000/api/fhir/metadata
+```
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/chat` | Send a message to the agent |
+| `GET` | `/api/manifest/{session_id}` | Get current manifest |
+| `POST` | `/api/manifest/{session_id}/approve` | Approve/reject manifest items |
+| `POST` | `/api/manifest/{session_id}/execute` | Execute approved items |
+| `GET` | `/api/sessions` | List active sessions |
+| `GET` | `/api/health` | Health check |
+| `GET` | `/api/fhir/metadata` | FHIR capability statement |
+
+### Example Chat Request
+
+```bash
+curl -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "What are this patient'\''s active diagnoses?",
+    "page_context": {"patient_id": "1", "page_type": "problem_list"}
+  }'
+```
+
+## Testing
+
+### Unit Tests
+
+```bash
+uv run pytest tests/unit/ -v
+```
+
+### Eval Suite
+
+The eval framework tests the agent against 52 clinical scenarios across four categories:
+
+| Category | Count | Focus |
+|----------|-------|-------|
+| `happy_path` | 20 | Common clinical tasks with expected outcomes |
+| `edge_case` | 10 | Missing data, ambiguous inputs, boundary conditions |
+| `adversarial` | 10 | Refusal of dangerous/inappropriate requests |
+| `output_quality` | 12 | Clinical document generation quality |
+
+```bash
+# Run full eval suite (requires agent running on port 8000)
+uv run python -m tests.eval.run_eval
+
+# Run a single category
+uv run python -m tests.eval.run_eval --category happy_path
+
+# Run a single case
+uv run python -m tests.eval.run_eval --case-id hp-01
+
+# Save results to file
+uv run python -m tests.eval.run_eval --output results.json
+
+# Against a different URL
+uv run python -m tests.eval.run_eval --url http://localhost:8000
+```
+
+## Observability
+
+Traces are exported via OpenTelemetry to Jaeger:
+
+- **Jaeger UI**: http://localhost:16686
+- **OTLP gRPC**: localhost:4317
+- **OTLP HTTP**: localhost:4318
+
+Every LLM call, tool invocation, and verification check emits a span with attributes for token counts, latency, and manifest operations.
+
+## Project Structure
+
+```
+src/
+├── agent/
+│   ├── loop.py          # Core agent loop (LLM ↔ tools)
+│   ├── models.py        # Session, manifest, tool call models
+│   └── prompts.py       # System prompt and tool definitions
+├── api/
+│   ├── main.py          # FastAPI app and endpoints
+│   └── schemas.py       # Request/response schemas
+├── tools/
+│   ├── openemr_client.py # OpenEMR FHIR + REST client
+│   └── registry.py      # Tool registration and execution
+├── verification/
+│   ├── checks.py        # Grounding, constraint, confidence, conflict checks
+│   └── icd10.py         # ICD-10 and CPT code validation
+└── observability/
+    └── tracing.py       # OpenTelemetry setup
+
+tests/
+├── unit/                # Unit tests (82 cases)
+├── eval/
+│   ├── dataset.json     # 52 eval cases
+│   ├── runner.py        # Eval runner
+│   └── run_eval.py      # CLI entry point
+└── conftest.py
+
+docker/
+├── Dockerfile           # Agent backend container
+└── seed_data.sql        # Synthetic patient data (3 patients)
+```
+
+## Seed Data
+
+Three synthetic patients with clinical data for testing:
+
+| Patient | Conditions | Medications | Labs |
+|---------|-----------|-------------|------|
+| Maria Santos (pid=1) | T2DM (E11.9), HTN (I10) | Metformin 500mg, Lisinopril 10mg | HbA1c 7.8→8.2 |
+| James Kowalski (pid=2) | COPD (J44.1), AFib (I48.91), T2DM (E11.65) | Tiotropium, Apixaban 5mg, Metformin 1000mg | BNP 385 |
+| Aisha Patel (pid=3) | MDD (F33.1), Hypothyroidism (E03.9) | Sertraline 100mg, Levothyroxine 75mcg | TSH 6.8 |
