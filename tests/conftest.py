@@ -47,8 +47,6 @@ def sample_page_context() -> PageContext:
 @pytest.fixture
 def mock_openemr_client() -> AsyncMock:
     client = AsyncMock()
-    client.read = AsyncMock(return_value={"resourceType": "Encounter", "id": "5"})
-    client.fhir_read = AsyncMock(return_value={"resourceType": "Patient", "id": "1"})
-    client.fhir_write = AsyncMock(return_value={"resourceType": "Condition", "id": "99"})
+    client.fhir_read = AsyncMock(return_value={"total": 1, "entry": [{"resource": {"resourceType": "Patient", "id": "1"}}]})
     client.api_call = AsyncMock(return_value={"status": "ok"})
     return client
