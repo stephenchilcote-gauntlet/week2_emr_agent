@@ -87,13 +87,11 @@ in OpenEMR and should NOT be included in manifest items.
 
 ### MedicationRequest write limitations
 
-OpenEMR stores medications in two separate tables: the `lists` table \
-(managed by the REST API) and the `prescriptions` table (UI-entered and \
-imported data). The REST API can only modify medications in the `lists` \
-table. Medications from the `prescriptions` table appear in FHIR reads \
-but **cannot be deleted** via the API. For updates, the system will \
-automatically create a replacement entry. For deletions, instruct the \
-clinician to deactivate the original entry manually in OpenEMR.
+OpenEMR stores medications in the `lists` table (where `type='medication'`). \
+The REST API manages this table directly. Note: creating a medication via \
+REST POST may leave the `uuid` field NULL, which can cause subsequent \
+list endpoint calls to fail. For deletions, instruct the clinician to \
+deactivate the entry manually in OpenEMR if the REST DELETE fails.
 
 ### Examples
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Protocol
 
 import anthropic
@@ -31,7 +32,7 @@ from .translator import (
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 15
-MODEL = "claude-sonnet-4-20250514"
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 MAX_CONTEXT_TOKENS = 150_000
 MAX_TOOL_RESULT_CHARS = 50_000
 
@@ -732,9 +733,8 @@ class AgentLoop:
         than UUIDs.  This fetches the list entries and finds the one whose
         ``uuid`` field matches, returning its numeric ``id``.
 
-        Raises ``ValueError`` when the UUID cannot be found — this typically
-        means the FHIR resource lives in the ``prescriptions`` table (e.g.
-        Synthea imports) which is read-only via the REST API.
+        Raises ``ValueError`` when the UUID cannot be found in the REST
+        endpoint response (e.g. if a prior REST POST left a NULL uuid).
         """
         entries = await self.openemr_client.api_call(list_endpoint)
         if isinstance(entries, list):
@@ -743,9 +743,8 @@ class AgentLoop:
                     return str(entry["id"])
         raise ValueError(
             f"FHIR resource {fhir_uuid} not found in REST endpoint "
-            f"{list_endpoint}. This medication may originate from a "
-            f"read-only source (e.g. prescriptions table) and cannot "
-            f"be modified via the REST API."
+            f"{list_endpoint}. The medication's uuid may be NULL "
+            f"(caused by REST POST) and cannot be resolved."
         )
 
     @staticmethod
