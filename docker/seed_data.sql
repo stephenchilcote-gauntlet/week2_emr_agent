@@ -41,21 +41,22 @@ ON DUPLICATE KEY UPDATE `fname` = VALUES(`fname`);
 -- OpenEMR stores problems in the `lists` table with type='medical_problem'.
 -- ============================================================
 
+-- Use high IDs (90xxx) to avoid collision with Synthea demo data.
 INSERT INTO `lists` (
   `id`, `pid`, `type`, `title`, `diagnosis`, `begdate`, `activity`
 ) VALUES
--- Maria Santos
-(1, 1, 'medical_problem', 'Type 2 Diabetes Mellitus', 'ICD10:E11.9', '2019-06-15', 1),
-(2, 1, 'medical_problem', 'Essential Hypertension',   'ICD10:I10',   '2020-01-20', 1),
+-- Maria Santos (pid=4)
+(90101, 4, 'medical_problem', 'Type 2 Diabetes Mellitus', 'ICD10:E11.9', '2019-06-15', 1),
+(90102, 4, 'medical_problem', 'Essential Hypertension',   'ICD10:I10',   '2020-01-20', 1),
 
--- James Kowalski
-(3, 2, 'medical_problem', 'Chronic Obstructive Pulmonary Disease', 'ICD10:J44.1', '2015-09-10', 1),
-(4, 2, 'medical_problem', 'Atrial Fibrillation',                  'ICD10:I48.91', '2021-03-05', 1),
-(5, 2, 'medical_problem', 'Type 2 Diabetes Mellitus',             'ICD10:E11.65', '2018-11-12', 1),
+-- James Kowalski (pid=5)
+(90201, 5, 'medical_problem', 'Chronic Obstructive Pulmonary Disease', 'ICD10:J44.1', '2015-09-10', 1),
+(90202, 5, 'medical_problem', 'Atrial Fibrillation',                   'ICD10:I48.91', '2021-03-05', 1),
+(90203, 5, 'medical_problem', 'Type 2 Diabetes Mellitus',              'ICD10:E11.65', '2018-11-12', 1),
 
--- Aisha Patel
-(6, 3, 'medical_problem', 'Major Depressive Disorder, recurrent', 'ICD10:F33.1', '2017-04-22', 1),
-(7, 3, 'medical_problem', 'Hypothyroidism',                       'ICD10:E03.9', '2020-08-01', 1)
+-- Aisha Patel (pid=6)
+(90301, 6, 'medical_problem', 'Major Depressive Disorder, recurrent', 'ICD10:F33.1', '2017-04-22', 1),
+(90302, 6, 'medical_problem', 'Hypothyroidism',                       'ICD10:E03.9', '2020-08-01', 1)
 ON DUPLICATE KEY UPDATE `title` = VALUES(`title`);
 
 
@@ -66,18 +67,18 @@ ON DUPLICATE KEY UPDATE `title` = VALUES(`title`);
 INSERT INTO `lists` (
   `id`, `pid`, `type`, `title`, `begdate`, `activity`
 ) VALUES
--- Maria Santos
-(8,  1, 'medication', 'Metformin 500mg twice daily',       '2019-06-15', 1),
-(9,  1, 'medication', 'Lisinopril 10mg daily',             '2020-01-20', 1),
+-- Maria Santos (pid=4)
+(90103, 4, 'medication', 'Metformin 500mg twice daily',       '2019-06-15', 1),
+(90104, 4, 'medication', 'Lisinopril 10mg daily',             '2020-01-20', 1),
 
--- James Kowalski
-(10, 2, 'medication', 'Tiotropium 18mcg inhaler daily',    '2015-09-10', 1),
-(11, 2, 'medication', 'Apixaban 5mg twice daily',          '2021-03-05', 1),
-(12, 2, 'medication', 'Metformin 1000mg twice daily',      '2018-11-12', 1),
+-- James Kowalski (pid=5)
+(90204, 5, 'medication', 'Tiotropium 18mcg inhaler daily',    '2015-09-10', 1),
+(90205, 5, 'medication', 'Apixaban 5mg twice daily',          '2021-03-05', 1),
+(90206, 5, 'medication', 'Metformin 1000mg twice daily',      '2018-11-12', 1),
 
--- Aisha Patel
-(13, 3, 'medication', 'Sertraline 100mg daily',            '2017-04-22', 1),
-(14, 3, 'medication', 'Levothyroxine 75mcg daily',         '2020-08-01', 1)
+-- Aisha Patel (pid=6)
+(90303, 6, 'medication', 'Sertraline 100mg daily',            '2017-04-22', 1),
+(90304, 6, 'medication', 'Levothyroxine 75mcg daily',         '2020-08-01', 1)
 ON DUPLICATE KEY UPDATE `title` = VALUES(`title`);
 
 
@@ -90,10 +91,10 @@ ON DUPLICATE KEY UPDATE `title` = VALUES(`title`);
 INSERT INTO `procedure_order` (
   `procedure_order_id`, `patient_id`, `date_ordered`, `order_status`
 ) VALUES
-(1, 1, '2025-01-10', 'complete'),
-(2, 1, '2025-07-15', 'complete'),
-(3, 2, '2025-02-20', 'complete'),
-(4, 3, '2025-03-05', 'complete')
+(1, 4, '2025-01-10', 'complete'),
+(2, 4, '2025-07-15', 'complete'),
+(3, 5, '2025-02-20', 'complete'),
+(4, 6, '2025-03-05', 'complete')
 ON DUPLICATE KEY UPDATE `order_status` = VALUES(`order_status`);
 
 INSERT INTO `procedure_report` (
@@ -119,3 +120,34 @@ INSERT INTO `procedure_result` (
 -- Aisha Patel: TSH
 (4, 4, '11579-0', 'TSH', '6.8', 'mIU/L', '0.4-4.0', 'high', 'final')
 ON DUPLICATE KEY UPDATE `result` = VALUES(`result`);
+
+
+-- ============================================================
+-- Encounters for seed patients
+-- Using high IDs (90001+) to avoid conflicts with Synthea demo data
+-- ============================================================
+
+INSERT INTO `form_encounter` (
+  `id`, `pid`, `date`, `reason`, `facility`, `facility_id`,
+  `onset_date`, `pc_catid`, `billing_facility`
+) VALUES
+-- Maria Santos (pid=4)
+(90001, 4, '2025-01-15 09:00:00', 'Initial diabetes follow-up', '', 0, '2025-01-15', 5, 0),
+(90002, 4, '2025-07-20 10:00:00', 'Diabetes management and medication review', '', 0, '2025-07-20', 5, 0),
+
+-- James Kowalski (pid=5)
+(90003, 5, '2025-02-10 14:00:00', 'COPD exacerbation evaluation', '', 0, '2025-02-10', 5, 0),
+
+-- Aisha Patel (pid=6)
+(90004, 6, '2025-03-05 11:00:00', 'Depression follow-up and thyroid management', '', 0, '2025-03-05', 5, 0)
+ON DUPLICATE KEY UPDATE `reason` = VALUES(`reason`);
+
+-- OpenEMR also requires a forms table entry for each encounter
+INSERT INTO `forms` (
+  `id`, `encounter`, `form_id`, `form_name`, `formdir`, `pid`, `date`
+) VALUES
+(90001, 90001, 90001, 'New Patient Encounter', 'newpatient', 4, '2025-01-15 09:00:00'),
+(90002, 90002, 90002, 'New Patient Encounter', 'newpatient', 4, '2025-07-20 10:00:00'),
+(90003, 90003, 90003, 'New Patient Encounter', 'newpatient', 5, '2025-02-10 14:00:00'),
+(90004, 90004, 90004, 'New Patient Encounter', 'newpatient', 6, '2025-03-05 11:00:00')
+ON DUPLICATE KEY UPDATE `form_name` = VALUES(`form_name`);

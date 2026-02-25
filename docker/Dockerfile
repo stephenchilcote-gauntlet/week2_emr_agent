@@ -8,6 +8,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 COPY src/ src/
+COPY web/ web/
 
 EXPOSE 8000
 

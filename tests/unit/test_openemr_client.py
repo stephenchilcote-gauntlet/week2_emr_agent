@@ -64,7 +64,7 @@ async def test_fhir_read_retries_once_on_401_after_reauth() -> None:
     success = _http_response(200, {"resourceType": "Bundle", "total": 1})
     client._http.get = AsyncMock(side_effect=[unauthorized, success])
 
-    result = await client.fhir_read("Patient", {"_id": "1"})
+    result = await client.fhir_read("Patient", {"identifier": "pat-1"})
 
     assert result["total"] == 1
     assert client._ensure_auth.await_count == 2
