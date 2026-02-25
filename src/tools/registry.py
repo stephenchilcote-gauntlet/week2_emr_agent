@@ -123,34 +123,12 @@ async def tool_fhir_read(
     return await client.fhir_read(resource_type, params)
 
 
-async def tool_fhir_write(
-    client: OpenEMRClient,
-    resource_type: str,
-    payload: dict,
-    manifest_item_id: str | None = None,
-    registry: ToolRegistry | None = None,
-) -> dict:
-    """Write a FHIR resource after verifying manifest approval."""
-    if manifest_item_id and registry and registry._pending_manifest:
-        item = next(
-            (i for i in registry._pending_manifest.items if i.id == manifest_item_id),
-            None,
-        )
-        if item is None:
-            return {"error": f"Manifest item '{manifest_item_id}' not found"}
-        if not item.approved:
-            return {"error": f"Manifest item '{manifest_item_id}' not approved"}
-    return await client.fhir_write(resource_type, payload)
-
-
 async def tool_openemr_api(
     client: OpenEMRClient,
     endpoint: str,
-    method: str = "GET",
-    payload: dict | None = None,
 ) -> dict:
-    """Call an arbitrary OpenEMR REST API endpoint."""
-    return await client.api_call(endpoint, method, payload)
+    """Call an OpenEMR REST API endpoint (GET only)."""
+    return await client.api_call(endpoint, "GET")
 
 
 async def tool_get_page_context(registry: ToolRegistry) -> dict:
@@ -206,52 +184,15 @@ def register_default_tools(registry: ToolRegistry) -> None:
     )
 
     registry.register(
-        name="fhir_write",
-        func=lambda resource_type, payload, manifest_item_id=None: tool_fhir_write(
-            client, resource_type, payload, manifest_item_id, registry
-        ),
-        description="Create a FHIR resource. Requires prior manifest approval for writes.",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "resource_type": {
-                    "type": "string",
-                    "description": "FHIR resource type to create.",
-                },
-                "payload": {
-                    "type": "object",
-                    "description": "FHIR resource JSON body.",
-                },
-                "manifest_item_id": {
-                    "type": "string",
-                    "description": "ID of the approved manifest item authorising this write.",
-                },
-            },
-            "required": ["resource_type", "payload"],
-        },
-    )
-
-    registry.register(
         name="openemr_api",
-        func=lambda endpoint, method="GET", payload=None: tool_openemr_api(
-            client, endpoint, method, payload
-        ),
-        description="Call an OpenEMR REST API endpoint (non-FHIR).",
+        func=lambda endpoint: tool_openemr_api(client, endpoint),
+        description="Read data from OpenEMR REST API endpoints (GET only).",
         input_schema={
             "type": "object",
             "properties": {
                 "endpoint": {
                     "type": "string",
                     "description": "API path, e.g. 'patient/1'.",
-                },
-                "method": {
-                    "type": "string",
-                    "enum": ["GET", "POST", "PUT", "DELETE"],
-                    "description": "HTTP method (default GET).",
-                },
-                "payload": {
-                    "type": "object",
-                    "description": "Request body for POST/PUT.",
                 },
             },
             "required": ["endpoint"],

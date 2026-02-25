@@ -164,7 +164,6 @@ class TestDefaultTools:
         defs = registry.get_tool_definitions()
         names = {d["name"] for d in defs}
         assert "fhir_read" in names
-        assert "fhir_write" in names
         assert "openemr_api" in names
         assert "get_page_context" in names
         assert "submit_manifest" in names
@@ -185,7 +184,11 @@ class TestDefaultTools:
     @pytest.mark.asyncio
     async def test_fhir_read_tool(self):
         client = AsyncMock(spec=OpenEMRClient)
-        client.fhir_read = AsyncMock(return_value={"resourceType": "Patient", "id": "1"})
+        client.fhir_read = AsyncMock(return_value={
+            "resourceType": "Bundle",
+            "total": 1,
+            "entry": [{"resource": {"resourceType": "Patient", "id": "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"}}],
+        })
         # Also mock _ensure_auth so it doesn't try real HTTP
         client._ensure_auth = AsyncMock()
 
@@ -194,7 +197,8 @@ class TestDefaultTools:
 
         result_json = await registry.execute("fhir_read", {"resource_type": "Patient"})
         result = json.loads(result_json)
-        assert result["resourceType"] == "Patient"
+        assert result["resourceType"] == "Bundle"
+        assert result["entry"][0]["resource"]["id"] == "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
 
     @pytest.mark.asyncio
     async def test_get_page_context_via_registry(self):

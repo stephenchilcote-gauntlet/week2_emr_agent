@@ -145,6 +145,7 @@ class OpenEMRClient:
             return {"error": str(exc), "status_code": exc.response.status_code}
         except httpx.RequestError as exc:
             return {"error": str(exc)}
+
     # ------------------------------------------------------------------
     # Generic REST API helper
     # ------------------------------------------------------------------
