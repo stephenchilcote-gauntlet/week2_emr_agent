@@ -67,9 +67,9 @@ class TestChatBasics:
     """Verify basic chat input/output flow."""
 
     def test_empty_message_not_sent(self, sidebar_page: Page):
-        """Clicking Send with empty input does nothing."""
-        sidebar_page.locator("#send-button").click()
-        sidebar_page.wait_for_timeout(500)
+        """Send button is hidden when input is empty, preventing empty sends."""
+        send_btn = sidebar_page.locator("#send-button")
+        expect(send_btn).not_to_have_class("visible")
         messages = sidebar_page.locator(".message.role-user")
         assert messages.count() == 0
 

@@ -60,6 +60,8 @@ class SidebarApp {
     if (!this.state.sessionID) {
       await this.createSession()
     }
+
+    this.toggleSend(true)
   }
 
   bindEvents() {

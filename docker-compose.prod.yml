@@ -1,0 +1,88 @@
+services:
+  mysql:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: openemr
+      MYSQL_USER: openemr
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/seed_data.sql:/docker-entrypoint-initdb.d/99-seed.sql
+    networks:
+      - emr-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  openemr:
+    image: openemr/openemr:flex
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_ROOT_PASS: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_USER: openemr
+      MYSQL_PASS: ${MYSQL_PASSWORD}
+      OE_USER: admin
+      OE_PASS: ${OPENEMR_ADMIN_PASS}
+      MANUAL_SETUP: 0
+      DEMO_MODE: standard
+      OPENEMR_AGENT_API_URL: http://agent:8000
+      FLEX_REPOSITORY: https://github.com/stephenchilcote-gauntlet/openemr.git
+      FLEX_REPOSITORY_BRANCH: master
+    volumes:
+      - openemr_sites:/var/www/localhost/htdocs/openemr/sites
+      - openemr_logs:/var/log
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - emr-net
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      OPENEMR_BASE_URL: http://openemr:80
+      OPENEMR_FHIR_URL: http://openemr:80/apis/default/fhir
+      OPENEMR_CLIENT_ID: ${OPENEMR_CLIENT_ID}
+      OPENEMR_CLIENT_SECRET: ${OPENEMR_CLIENT_SECRET}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    volumes:
+      - agent_data:/app/data
+    depends_on:
+      - openemr
+    networks:
+      - emr-net
+
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16686:16686"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks:
+      - emr-net
+
+networks:
+  emr-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  openemr_sites:
+  openemr_logs:
+  agent_data:
