@@ -9,6 +9,7 @@ class PageContextRequest(BaseModel):
     patient_id: str | None = None
     encounter_id: str | None = None
     page_type: str | None = None
+    visible_data: dict[str, Any] | None = None
 
 
 class ChatRequest(BaseModel):
@@ -22,11 +23,14 @@ class ChatResponse(BaseModel):
     response: str
     manifest: dict[str, Any] | None = None
     phase: str
+    error: str | None = None
+    tool_calls_summary: list[dict[str, Any]] | None = None
 
 
 class ApprovalRequest(BaseModel):
     approved_items: list[str] = Field(default_factory=list)
     rejected_items: list[str] = Field(default_factory=list)
+    modified_items: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ApprovalResponse(BaseModel):
@@ -44,3 +48,4 @@ class ManifestResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     openemr_connected: bool
+    openemr_status: str

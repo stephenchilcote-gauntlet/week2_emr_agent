@@ -5,7 +5,9 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .labels import LabelRegistry
 
 
 class ToolCall(BaseModel):
@@ -36,7 +38,9 @@ class ManifestItem(BaseModel):
     description: str
     confidence: str = "high"
     status: str = "pending"
+    target_resource_id: str | None = None
     depends_on: list[str] = Field(default_factory=list)
+    execution_result: str | None = None
 
 
 class ChangeManifest(BaseModel):
@@ -51,8 +55,9 @@ class ChangeManifest(BaseModel):
 class PageContext(BaseModel):
     patient_id: str | None = None
     encounter_id: str | None = None
-    page_type: str | None = None
+    page_type: str | None = None  # OpenEMR active tab name (e.g. "pat", "enc")
     active_form: dict[str, Any] | None = None
+    visible_data: dict[str, Any] | None = None
 
 
 class AgentMessage(BaseModel):
@@ -61,10 +66,24 @@ class AgentMessage(BaseModel):
     tool_calls: list[ToolCall] | None = None
     tool_results: list[ToolResult] | None = None
 
+    @model_validator(mode="after")
+    def _validate_role_contract(self) -> "AgentMessage":
+        if self.role not in {"user", "assistant", "tool"}:
+            raise ValueError("role must be one of: user, assistant, tool")
+        if self.role == "tool" and not self.tool_results:
+            raise ValueError("tool messages must include tool_results")
+        return self
+
 
 class AgentSession(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     id: str = Field(default_factory=lambda: str(uuid4()))
     messages: list[AgentMessage] = Field(default_factory=list)
     manifest: ChangeManifest | None = None
     page_context: PageContext | None = None
     phase: str = "planning"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    openemr_user_id: str | None = None
+    fhir_patient_id: str | None = None
+    label_registry: LabelRegistry = Field(default_factory=LabelRegistry, exclude=True)

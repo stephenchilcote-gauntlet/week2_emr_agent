@@ -6,6 +6,7 @@ import pytest
 
 from src.agent.models import (
     AgentSession,
+    AgentMessage,
     ChangeManifest,
     ManifestAction,
     ManifestItem,
@@ -88,8 +89,8 @@ class TestPageContext:
         assert ctx.active_form is None
 
     def test_with_values(self, sample_page_context):
-        assert sample_page_context.patient_id == "patient-1"
-        assert sample_page_context.encounter_id == "encounter-5"
+        assert sample_page_context.patient_id == "5"
+        assert sample_page_context.encounter_id == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         assert sample_page_context.page_type == "encounter"
 
 
@@ -111,6 +112,16 @@ class TestAgentSession:
         assert session.phase == "reviewing"
         session.phase = "complete"
         assert session.phase == "complete"
+
+
+class TestAgentMessage:
+    def test_invalid_role_rejected(self):
+        with pytest.raises(ValueError, match="role must be one of"):
+            AgentMessage(role="system", content="x")
+
+    def test_tool_message_requires_results(self):
+        with pytest.raises(ValueError, match="tool messages must include tool_results"):
+            AgentMessage(role="tool", content="")
 
 
 class TestToolCall:
