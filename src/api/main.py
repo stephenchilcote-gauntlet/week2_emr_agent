@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from collections import Counter
 
 import anthropic
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from opentelemetry import trace as otel_trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from ..agent.loop import AgentLoop
@@ -24,9 +29,10 @@ from .schemas import (
     HealthResponse,
     ManifestResponse,
 )
+from .session_store import SessionStore
 
-# In-memory session store
-_sessions: dict[str, AgentSession] = {}
+_session_locks: dict[str, asyncio.Lock] = {}
+_web_root = Path(__file__).resolve().parents[2] / "web" / "sidebar"
 
 
 @asynccontextmanager
@@ -37,7 +43,12 @@ async def lifespan(app: FastAPI):
     )
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
-    openemr_client = OpenEMRClient(base_url=base_url, fhir_url=fhir_url)
+    openemr_client = OpenEMRClient(
+        base_url=base_url,
+        fhir_url=fhir_url,
+        client_id=os.environ.get("OPENEMR_CLIENT_ID", ""),
+        client_secret=os.environ.get("OPENEMR_CLIENT_SECRET", ""),
+    )
     tool_registry = ToolRegistry(openemr_client)
     register_default_tools(tool_registry)
 
@@ -46,11 +57,14 @@ async def lifespan(app: FastAPI):
         anthropic_client=anthropic_client,
         openemr_client=openemr_client,
         tools_registry=tool_registry,
+        tracer=tracer,
     )
+    session_store = SessionStore(os.environ.get("SESSION_DB_PATH", "data/sessions.db"))
 
     app.state.openemr_client = openemr_client
     app.state.tool_registry = tool_registry
     app.state.agent_loop = agent_loop
+    app.state.session_store = session_store
 
     yield
 
@@ -61,10 +75,17 @@ tracer = setup_tracing("openemr-agent")
 
 app = FastAPI(title="OpenEMR Clinical Agent", version="0.1.0", lifespan=lifespan)
 
+cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ALLOW_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+allow_credentials = False if cors_origins == ["*"] else True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -72,45 +93,125 @@ app.add_middleware(
 FastAPIInstrumentor.instrument_app(app)
 
 
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
+def _require_user_id(
+    openemr_user_id: str | None = Header(default=None, alias="openemr_user_id"),
+) -> str:
+    if not openemr_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    return openemr_user_id
 
 
-def _get_or_create_session(session_id: str | None) -> AgentSession:
-    if session_id and session_id in _sessions:
-        return _sessions[session_id]
-    session = AgentSession()
-    _sessions[session.id] = session
-    return session
+def _summarize_tool_calls(session: AgentSession) -> list[dict[str, Any]] | None:
+    for message in reversed(session.messages):
+        if message.role == "assistant" and message.tool_calls:
+            counts = Counter(tc.name for tc in message.tool_calls)
+            return [
+                {"name": tool_name, "count": count}
+                for tool_name, count in sorted(counts.items())
+            ]
+    return None
 
 
-def _get_session(session_id: str) -> AgentSession:
-    session = _sessions.get(session_id)
+def _get_or_create_session(
+    session_id: str | None,
+    user_id: str,
+    session_store: SessionStore,
+) -> AgentSession:
+    if session_id is None:
+        session = AgentSession(openemr_user_id=user_id)
+        session_store.save(session)
+        return session
+
+    session = session_store.load(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    if session.openemr_user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     return session
 
 
-# ------------------------------------------------------------------
-# Endpoints
-# ------------------------------------------------------------------
+def _get_session(
+    session_id: str,
+    user_id: str,
+    session_store: SessionStore,
+) -> AgentSession:
+    session = session_store.load(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.openemr_user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return session
+
+
+def _session_summary(session: AgentSession) -> dict[str, Any]:
+    first_user = next((m for m in session.messages if m.role == "user"), None)
+    preview = (first_user.content if first_user else "")[:60]
+    patient_name = None
+    if session.page_context and session.page_context.visible_data:
+        visible_data = session.page_context.visible_data
+        if isinstance(visible_data, dict):
+            patient_name = visible_data.get("patient_name") or visible_data.get("name")
+    return {
+        "session_id": session.id,
+        "phase": session.phase,
+        "message_count": len(session.messages),
+        "created_at": session.created_at.isoformat(),
+        "first_message_preview": preview,
+        "patient_name": patient_name,
+        "patient_id": session.page_context.patient_id if session.page_context else None,
+    }
+
+
+if _web_root.exists():
+    app.mount(
+        "/ui/assets",
+        StaticFiles(directory=str(_web_root)),
+        name="sidebar-assets",
+    )
+
+
+@app.get("/ui")
+async def sidebar_ui() -> FileResponse:
+    if not _web_root.exists():
+        raise HTTPException(status_code=404, detail="Sidebar UI not available")
+    index_path = _web_root / "index.html"
+    return FileResponse(index_path)
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
-    session = _get_or_create_session(req.session_id)
+async def chat(
+    req: ChatRequest,
+    user_id: str = Depends(_require_user_id),
+) -> ChatResponse:
+    session_store: SessionStore = app.state.session_store
+    session = _get_or_create_session(req.session_id, user_id, session_store)
+    otel_trace.get_current_span().set_attribute("session.id", session.id)
 
     if req.page_context:
         session.page_context = PageContext(
             patient_id=req.page_context.patient_id,
             encounter_id=req.page_context.encounter_id,
             page_type=req.page_context.page_type,
+            visible_data=req.page_context.visible_data,
         )
+
+    if session.page_context and session.page_context.patient_id and not session.fhir_patient_id:
+        patient_result = await app.state.openemr_client.fhir_read(
+            "Patient",
+            {"identifier": session.page_context.patient_id},
+        )
+        if patient_result.get("entry"):
+            fhir_id = patient_result["entry"][0].get("resource", {}).get("id")
+            if fhir_id:
+                session.fhir_patient_id = fhir_id
+                session.label_registry.register(fhir_id, "Patient")
 
     agent_loop: AgentLoop = app.state.agent_loop
     session = await agent_loop.run(session, req.message)
-    _sessions[session.id] = session
+    session_store.save(session)
 
     last_assistant = ""
     for msg in reversed(session.messages):
@@ -123,21 +224,71 @@ async def chat(req: ChatRequest) -> ChatResponse:
         response=last_assistant,
         manifest=session.manifest.model_dump() if session.manifest else None,
         phase=session.phase,
+        tool_calls_summary=_summarize_tool_calls(session),
     )
 
 
+@app.post("/api/sessions")
+async def create_session(
+    user_id: str = Depends(_require_user_id),
+) -> dict[str, str]:
+    session = AgentSession(openemr_user_id=user_id)
+    app.state.session_store.save(session)
+    otel_trace.get_current_span().set_attribute("session.id", session.id)
+    return {"session_id": session.id, "phase": session.phase}
+
+
+@app.get("/api/sessions")
+async def list_sessions(
+    user_id: str = Depends(_require_user_id),
+) -> list[dict[str, Any]]:
+    sessions = app.state.session_store.list_for_user(user_id)
+    return [_session_summary(session) for session in sessions]
+
+
+@app.get("/api/sessions/{session_id}/messages")
+async def get_messages(
+    session_id: str,
+    user_id: str = Depends(_require_user_id),
+) -> dict[str, Any]:
+    session = _get_session(session_id, user_id, app.state.session_store)
+    otel_trace.get_current_span().set_attribute("session.id", session.id)
+    return {
+        "session_id": session.id,
+        "messages": [message.model_dump() for message in session.messages],
+        "manifest": session.manifest.model_dump() if session.manifest else None,
+    }
+
+
 @app.post("/api/manifest/{session_id}/approve", response_model=ApprovalResponse)
-async def approve_manifest(session_id: str, req: ApprovalRequest) -> ApprovalResponse:
-    session = _get_session(session_id)
+async def approve_manifest(
+    session_id: str,
+    req: ApprovalRequest,
+    user_id: str = Depends(_require_user_id),
+) -> ApprovalResponse:
+    session_store: SessionStore = app.state.session_store
+    session = _get_session(session_id, user_id, session_store)
+    otel_trace.get_current_span().set_attribute("session.id", session.id)
 
     if session.manifest is None:
         raise HTTPException(status_code=400, detail="No manifest for this session")
+
+    modifications = {
+        item.get("id"): item.get("proposed_value")
+        for item in req.modified_items
+        if item.get("id") and isinstance(item.get("proposed_value"), dict)
+    }
+    for item in session.manifest.items:
+        if item.id in modifications:
+            item.proposed_value = modifications[item.id]
 
     for item in session.manifest.items:
         if item.id in req.approved_items:
             item.status = "approved"
         elif item.id in req.rejected_items:
             item.status = "rejected"
+        else:
+            item.status = "pending"
 
     openemr_client: OpenEMRClient = app.state.openemr_client
 
@@ -149,6 +300,7 @@ async def approve_manifest(session_id: str, req: ApprovalRequest) -> ApprovalRes
 
         report = VerificationReport(manifest_id=session.manifest.id)
 
+    session_store.save(session)
     return ApprovalResponse(
         session_id=session.id,
         manifest_id=session.manifest.id,
@@ -158,54 +310,67 @@ async def approve_manifest(session_id: str, req: ApprovalRequest) -> ApprovalRes
 
 
 @app.post("/api/manifest/{session_id}/execute")
-async def execute_manifest(session_id: str) -> dict[str, Any]:
-    session = _get_session(session_id)
+async def execute_manifest(
+    session_id: str,
+    user_id: str = Depends(_require_user_id),
+) -> dict[str, Any]:
+    session_store: SessionStore = app.state.session_store
+    session = _get_session(session_id, user_id, session_store)
+    otel_trace.get_current_span().set_attribute("session.id", session.id)
 
     if session.manifest is None:
         raise HTTPException(status_code=400, detail="No manifest for this session")
 
+    lock = _session_locks.setdefault(session_id, asyncio.Lock())
     agent_loop: AgentLoop = app.state.agent_loop
-    session = await agent_loop.execute_approved(session)
-    _sessions[session.id] = session
+    async with lock:
+        session = await agent_loop.execute_approved(session)
+    session_store.save(session)
 
     return {
         "session_id": session.id,
         "phase": session.phase,
         "manifest_status": session.manifest.status if session.manifest else None,
         "items": [
-            {"id": item.id, "status": item.status}
+            {
+                "id": item.id,
+                "status": item.status,
+                "execution_result": item.execution_result,
+            }
             for item in (session.manifest.items if session.manifest else [])
         ],
     }
 
 
 @app.get("/api/manifest/{session_id}", response_model=ManifestResponse)
-async def get_manifest(session_id: str) -> ManifestResponse:
-    session = _get_session(session_id)
+async def get_manifest(
+    session_id: str,
+    user_id: str = Depends(_require_user_id),
+) -> ManifestResponse:
+    session = _get_session(session_id, user_id, app.state.session_store)
+    otel_trace.get_current_span().set_attribute("session.id", session.id)
     return ManifestResponse(
         session_id=session.id,
         manifest=session.manifest.model_dump() if session.manifest else None,
     )
 
 
-@app.get("/api/sessions")
-async def list_sessions() -> list[dict[str, Any]]:
-    return [
-        {"session_id": s.id, "phase": s.phase, "message_count": len(s.messages)}
-        for s in _sessions.values()
-    ]
-
-
 @app.get("/api/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
     connected = False
+    openemr_status = "starting"
     try:
         openemr_client: OpenEMRClient = app.state.openemr_client
         metadata = await openemr_client.get_fhir_metadata()
         connected = "error" not in metadata
+        openemr_status = "ok" if connected else "error"
     except Exception:
-        pass
-    return HealthResponse(status="healthy", openemr_connected=connected)
+        openemr_status = "error"
+    return HealthResponse(
+        status="healthy",
+        openemr_connected=connected,
+        openemr_status=openemr_status,
+    )
 
 
 @app.get("/api/fhir/metadata")
