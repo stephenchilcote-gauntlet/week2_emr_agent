@@ -77,7 +77,7 @@ class EvalRunner:
         error = None
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=180.0) as client:
                 # Send chat message
                 resp = await client.post(
                     f"{self.agent_url}/api/chat",

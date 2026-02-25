@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
     tool_registry = ToolRegistry(openemr_client)
     register_default_tools(tool_registry)
 
-    anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
+    anthropic_client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=5)
     agent_loop = AgentLoop(
         anthropic_client=anthropic_client,
         openemr_client=openemr_client,
@@ -210,7 +210,13 @@ async def chat(
                 session.label_registry.register(fhir_id, "Patient")
 
     agent_loop: AgentLoop = app.state.agent_loop
-    session = await agent_loop.run(session, req.message)
+    try:
+        session = await agent_loop.run(session, req.message)
+    except anthropic.APIStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM API error: {exc.status_code} {exc.message}",
+        ) from exc
     session_store.save(session)
 
     last_assistant = ""
