@@ -1,0 +1,297 @@
+from __future__ import annotations
+
+import pytest
+
+from src.agent.dsl import DslItem, parse_manifest_dsl, _TYPE_ALIASES
+
+
+class TestSingleAdd:
+    def test_add_condition_all_fields(self):
+        xml = (
+            '<add type="Condition" code="E11.9" display="Type 2 diabetes mellitus"'
+            ' onset="2024-01-15" src="Encounter/5" id="item-1">'
+            "Add Type 2 diabetes diagnosis based on HbA1c results"
+            "</add>"
+        )
+        items = parse_manifest_dsl(xml)
+        assert len(items) == 1
+        item = items[0]
+        assert item.action == "add"
+        assert item.resource_type == "Condition"
+        assert item.description == "Add Type 2 diabetes diagnosis based on HbA1c results"
+        assert item.source_reference == "Encounter/5"
+        assert item.item_id == "item-1"
+        assert item.confidence == "high"
+        assert item.depends_on == []
+        assert item.ref is None
+        assert item.attrs["code"] == "E11.9"
+        assert item.attrs["display"] == "Type 2 diabetes mellitus"
+        assert item.attrs["onset"] == "2024-01-15"
+        # src, id, type are consumed — not in attrs
+        assert "src" not in item.attrs
+        assert "id" not in item.attrs
+        assert "type" not in item.attrs
+
+
+class TestSingleEdit:
+    def test_edit_medication_request(self):
+        xml = (
+            '<edit ref="MedicationRequest/123" dose="1000mg BID" src="Encounter/5">'
+            "Increase metformin dosage"
+            "</edit>"
+        )
+        items = parse_manifest_dsl(xml)
+        assert len(items) == 1
+        item = items[0]
+        assert item.action == "edit"
+        assert item.resource_type == "MedicationRequest"
+        assert item.ref == "MedicationRequest/123"
+        assert item.description == "Increase metformin dosage"
+        assert item.source_reference == "Encounter/5"
+        assert item.attrs["dose"] == "1000mg BID"
+        assert "ref" not in item.attrs
+
+
+class TestSingleRemove:
+    def test_remove_condition(self):
+        xml = (
+            '<remove ref="Condition/456" src="Encounter/5">'
+            "Remove resolved URI from active problem list"
+            "</remove>"
+        )
+        items = parse_manifest_dsl(xml)
+        assert len(items) == 1
+        item = items[0]
+        assert item.action == "remove"
+        assert item.resource_type == "Condition"
+        assert item.ref == "Condition/456"
+        assert item.source_reference == "Encounter/5"
+        assert item.description == "Remove resolved URI from active problem list"
+
+
+class TestMultipleElements:
+    def test_three_items_in_order(self):
+        xml = (
+            '<add type="Condition" code="E11.9" src="Encounter/5" id="i1">'
+            "Add diabetes"
+            "</add>"
+            '<edit ref="MedicationRequest/10" dose="500mg" src="Encounter/5" id="i2">'
+            "Change dose"
+            "</edit>"
+            '<remove ref="Condition/99" src="Encounter/5" id="i3">'
+            "Remove old condition"
+            "</remove>"
+        )
+        items = parse_manifest_dsl(xml)
+        assert len(items) == 3
+        assert items[0].action == "add"
+        assert items[0].item_id == "i1"
+        assert items[1].action == "edit"
+        assert items[1].item_id == "i2"
+        assert items[2].action == "remove"
+        assert items[2].item_id == "i3"
+
+
+class TestManifestWrapper:
+    def test_manifest_wrapper_handled(self):
+        xml = (
+            '<manifest patient="1">'
+            '<add type="Condition" code="J06.9" src="Encounter/1" id="m1">'
+            "Add URI"
+            "</add>"
+            "</manifest>"
+        )
+        items = parse_manifest_dsl(xml)
+        assert len(items) == 1
+        assert items[0].action == "add"
+        assert items[0].resource_type == "Condition"
+        assert items[0].item_id == "m1"
+
+
+class TestResourceTypeAliases:
+    @pytest.mark.parametrize(
+        "alias,expected",
+        [
+            ("Cond", "Condition"),
+            ("MedReq", "MedicationRequest"),
+            ("Allergy", "AllergyIntolerance"),
+            ("Obs", "Observation"),
+            ("Doc", "DocumentReference"),
+            ("Plan", "CarePlan"),
+            ("Proc", "Procedure"),
+            ("Enc", "Encounter"),
+            ("Imm", "Immunization"),
+            ("DiagReport", "DiagnosticReport"),
+            ("Med", "MedicationRequest"),
+            ("Medication", "MedicationRequest"),
+            ("Document", "DocumentReference"),
+            ("Patient", "Patient"),
+        ],
+    )
+    def test_alias_resolved(self, alias: str, expected: str):
+        xml = (
+            f'<add type="{alias}" src="Encounter/1">'
+            "Description"
+            "</add>"
+        )
+        items = parse_manifest_dsl(xml)
+        assert items[0].resource_type == expected
+
+    def test_all_aliases_in_map(self):
+        """Every alias in _TYPE_ALIASES resolves to a known FHIR type."""
+        known_types = {
+            "Condition",
+            "MedicationRequest",
+            "AllergyIntolerance",
+            "Observation",
+            "DocumentReference",
+            "CarePlan",
+            "Procedure",
+            "Encounter",
+            "Immunization",
+            "DiagnosticReport",
+            "Patient",
+            "ServiceRequest",
+        }
+        for alias, resolved in _TYPE_ALIASES.items():
+            assert resolved in known_types, f"Alias '{alias}' -> '{resolved}' unknown"
+
+
+class TestConfidenceAndDeps:
+    def test_conf_and_deps_parsed(self):
+        xml = (
+            '<add type="Condition" src="Encounter/1" conf="medium"'
+            ' deps="item-1,item-2" id="item-3">'
+            "Some description"
+            "</add>"
+        )
+        items = parse_manifest_dsl(xml)
+        item = items[0]
+        assert item.confidence == "medium"
+        assert item.depends_on == ["item-1", "item-2"]
+        assert item.item_id == "item-3"
+
+    def test_deps_whitespace_handling(self):
+        xml = (
+            '<add type="Condition" src="Encounter/1" deps="a , b , c">'
+            "Desc"
+            "</add>"
+        )
+        items = parse_manifest_dsl(xml)
+        assert items[0].depends_on == ["a", "b", "c"]
+
+
+class TestDefaultValues:
+    def test_defaults_when_omitted(self):
+        xml = '<add type="Condition" src="Encounter/1">Desc</add>'
+        items = parse_manifest_dsl(xml)
+        item = items[0]
+        assert item.confidence == "high"
+        assert item.depends_on == []
+        assert item.item_id  # auto-generated, non-empty
+        assert len(item.item_id) > 0
+
+
+class TestBareAmpersandSanitization:
+    def test_bare_ampersand_in_text(self):
+        xml = '<add type="Condition" src="Encounter/1">Valid &amp; Active</add>'
+        items = parse_manifest_dsl(xml)
+        assert items[0].description == "Valid & Active"
+
+    def test_bare_ampersand_not_escaped(self):
+        xml = '<add type="Condition" src="Encounter/1">Valid & Active</add>'
+        items = parse_manifest_dsl(xml)
+        assert items[0].description == "Valid & Active"
+
+    def test_existing_entities_preserved(self):
+        xml = '<add type="Condition" src="Encounter/1">A &lt; B &amp; C</add>'
+        items = parse_manifest_dsl(xml)
+        assert items[0].description == "A < B & C"
+
+
+class TestEmptyInput:
+    def test_empty_string(self):
+        assert parse_manifest_dsl("") == []
+
+    def test_whitespace_only(self):
+        assert parse_manifest_dsl("   \n\t  ") == []
+
+
+class TestInvalidXml:
+    def test_malformed_xml_raises(self):
+        with pytest.raises(ValueError, match="Invalid manifest DSL"):
+            parse_manifest_dsl("<add type='Condition'>unclosed")
+
+    def test_completely_broken_xml(self):
+        with pytest.raises(ValueError, match="Invalid manifest DSL"):
+            parse_manifest_dsl("<<<not xml at all>>>")
+
+
+class TestUnknownElement:
+    def test_unknown_tag_raises(self):
+        with pytest.raises(ValueError, match="Unknown DSL element"):
+            parse_manifest_dsl('<unknown src="Encounter/1">text</unknown>')
+
+    def test_mixed_valid_and_unknown_raises(self):
+        xml = (
+            '<add type="Condition" src="Encounter/1">Ok</add>'
+            '<bogus src="Encounter/1">Bad</bogus>'
+        )
+        with pytest.raises(ValueError, match="Unknown DSL element"):
+            parse_manifest_dsl(xml)
+
+
+class TestMissingRequiredAttrs:
+    def test_add_without_type_raises(self):
+        with pytest.raises(ValueError, match="missing required 'type'"):
+            parse_manifest_dsl('<add src="Encounter/1">No type</add>')
+
+    def test_edit_without_ref_raises(self):
+        with pytest.raises(ValueError, match="missing required 'ref'"):
+            parse_manifest_dsl('<edit src="Encounter/1">No ref</edit>')
+
+    def test_remove_without_ref_raises(self):
+        with pytest.raises(ValueError, match="missing required 'ref'"):
+            parse_manifest_dsl('<remove src="Encounter/1">No ref</remove>')
+
+
+class TestMultilineContent:
+    def test_multiline_description(self):
+        xml = (
+            '<add type="Condition" code="E11.9" src="Encounter/5">\n'
+            "    Add Type 2 diabetes diagnosis\n"
+            "    based on HbA1c results from lab report\n"
+            "</add>"
+        )
+        items = parse_manifest_dsl(xml)
+        assert "Add Type 2 diabetes diagnosis" in items[0].description
+        assert "based on HbA1c results" in items[0].description
+
+
+class TestRefResourceTypeResolution:
+    def test_edit_ref_resolves_alias(self):
+        xml = '<edit ref="Cond/456" dose="10mg" src="Encounter/1">Fix</edit>'
+        items = parse_manifest_dsl(xml)
+        assert items[0].resource_type == "Condition"
+        assert items[0].ref == "Cond/456"
+
+    def test_remove_ref_resolves_alias(self):
+        xml = '<remove ref="MedReq/789" src="Encounter/1">Remove</remove>'
+        items = parse_manifest_dsl(xml)
+        assert items[0].resource_type == "MedicationRequest"
+        assert items[0].ref == "MedReq/789"
+
+
+class TestDslItemDataclass:
+    def test_dataclass_fields(self):
+        item = DslItem(
+            action="add",
+            resource_type="Condition",
+            description="Test",
+            source_reference="Encounter/1",
+            item_id="id-1",
+        )
+        assert item.confidence == "high"
+        assert item.depends_on == []
+        assert item.ref is None
+        assert item.attrs == {}
