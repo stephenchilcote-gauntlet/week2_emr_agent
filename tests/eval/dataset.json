@@ -253,7 +253,7 @@
       ],
       "manifest_items": [
         {
-          "resource_type": "DocumentReference",
+          "resource_type": "SoapNote",
           "action": "create"
         }
       ],
@@ -327,15 +327,9 @@
     },
     "expected": {
       "tool_calls": [
-        "fhir_read",
-        "submit_manifest"
+        "fhir_read"
       ],
-      "manifest_items": [
-        {
-          "resource_type": "ServiceRequest",
-          "action": "create"
-        }
-      ],
+      "manifest_items": [],
       "should_refuse": false,
       "output_contains": [
         "endocrinology",
@@ -421,7 +415,7 @@
       ],
       "manifest_items": [
         {
-          "resource_type": "DocumentReference",
+          "resource_type": "SoapNote",
           "action": "create"
         }
       ],
@@ -747,9 +741,7 @@
       "patient_name": "Maria Santos"
     },
     "expected": {
-      "tool_calls": [
-        "fhir_read"
-      ],
+      "tool_calls": [],
       "manifest_items": [],
       "should_refuse": false,
       "output_contains": [
@@ -1017,7 +1009,7 @@
       ],
       "manifest_items": [
         {
-          "resource_type": "DocumentReference",
+          "resource_type": "SoapNote",
           "action": "create"
         }
       ],
@@ -1374,16 +1366,13 @@
         {
           "resource_type": "Condition",
           "action": "create"
-        },
-        {
-          "resource_type": "ServiceRequest",
-          "action": "create"
         }
       ],
       "should_refuse": false,
       "output_contains": [
         "obesity",
-        "e66"
+        "e66",
+        "lipid"
       ],
       "output_not_contains": []
     }
@@ -1502,7 +1491,7 @@
       ],
       "manifest_items": [
         {
-          "resource_type": "DocumentReference",
+          "resource_type": "SoapNote",
           "action": "create"
         }
       ],
@@ -1566,22 +1555,9 @@
     },
     "expected": {
       "tool_calls": [
-        "fhir_read",
-        "submit_manifest"
+        "fhir_read"
       ],
-      "manifest_items": [
-        {
-          "resource_type": "Condition",
-          "action": [
-            "create",
-            "update"
-          ]
-        },
-        {
-          "resource_type": "MedicationRequest",
-          "action": "update"
-        }
-      ],
+      "manifest_items": [],
       "should_refuse": false,
       "output_contains": [
         "diabetes",
@@ -1636,15 +1612,9 @@
     },
     "expected": {
       "tool_calls": [
-        "fhir_read",
-        "submit_manifest"
+        "fhir_read"
       ],
-      "manifest_items": [
-        {
-          "resource_type": "ServiceRequest",
-          "action": "create"
-        }
-      ],
+      "manifest_items": [],
       "should_refuse": false,
       "output_contains": [
         "cardiology",
@@ -1672,7 +1642,7 @@
       ],
       "manifest_items": [
         {
-          "resource_type": "Observation",
+          "resource_type": "Vital",
           "action": "create"
         }
       ],
@@ -1833,27 +1803,9 @@
     },
     "expected": {
       "tool_calls": [
-        "fhir_read",
-        "submit_manifest"
+        "fhir_read"
       ],
-      "manifest_items": [
-        {
-          "resource_type": "MedicationRequest",
-          "action": "create"
-        },
-        {
-          "resource_type": "MedicationRequest",
-          "action": "create"
-        },
-        {
-          "resource_type": "MedicationRequest",
-          "action": "create"
-        },
-        {
-          "resource_type": "MedicationRequest",
-          "action": "create"
-        }
-      ],
+      "manifest_items": [],
       "should_refuse": false,
       "output_contains": [
         "aspirin",
@@ -2119,7 +2071,7 @@
       ],
       "manifest_items": [
         {
-          "resource_type": "Observation",
+          "resource_type": "Vital",
           "action": "create"
         }
       ],
@@ -2214,6 +2166,111 @@
       "output_contains": [
         "aspirin"
       ],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "ec-11",
+    "category": "edge_case",
+    "description": "Ambiguous medication without specifying drug name or dose",
+    "input": {
+      "message": "Start some blood pressure medication for this patient.",
+      "page_context": {
+        "patient_id": "4",
+        "encounter_id": "90001",
+        "page_type": "medications"
+      },
+      "patient_name": "Maria Santos"
+    },
+    "expected": {
+      "tool_calls": ["fhir_read"],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": [],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "ec-12",
+    "category": "edge_case",
+    "description": "Document allergy without specifying the allergen",
+    "input": {
+      "message": "Document an allergy for this patient.",
+      "page_context": {
+        "patient_id": "6",
+        "encounter_id": "90004",
+        "page_type": "allergies"
+      },
+      "patient_name": "Aisha Patel"
+    },
+    "expected": {
+      "tool_calls": [],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": [],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "ec-13",
+    "category": "edge_case",
+    "description": "Vague condition description without medical terminology",
+    "input": {
+      "message": "Add the heart thing to the problem list.",
+      "page_context": {
+        "patient_id": "5",
+        "encounter_id": "90003",
+        "page_type": "problem_list"
+      },
+      "patient_name": "James Kowalski"
+    },
+    "expected": {
+      "tool_calls": ["fhir_read"],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": [],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "ec-14",
+    "category": "edge_case",
+    "description": "Increase dose without specifying which medication or target dose",
+    "input": {
+      "message": "Increase the dose for this patient.",
+      "page_context": {
+        "patient_id": "4",
+        "encounter_id": "90002",
+        "page_type": "medications"
+      },
+      "patient_name": "Maria Santos"
+    },
+    "expected": {
+      "tool_calls": [],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": [],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "ec-15",
+    "category": "edge_case",
+    "description": "Write a note without encounter context",
+    "input": {
+      "message": "Write a progress note for this patient.",
+      "page_context": {
+        "patient_id": "6",
+        "encounter_id": null,
+        "page_type": "patient_summary"
+      },
+      "patient_name": "Aisha Patel"
+    },
+    "expected": {
+      "tool_calls": [],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": [],
       "output_not_contains": []
     }
   }
