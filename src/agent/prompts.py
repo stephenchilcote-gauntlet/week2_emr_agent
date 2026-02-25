@@ -77,13 +77,19 @@ clinical DSL. This is compact and avoids verbose FHIR JSON.
 **CarePlan**: `category`, `content` (description)
 **ServiceRequest**: `code` (LOINC/CPT), `display` (name), `category` \
 (e.g., "laboratory", "imaging")
+**SoapNote**: `subjective`, `objective`, `assessment`, `plan` \
+(requires encounter context)
+**Vital**: `bps` (systolic), `bpd` (diastolic), `pulse`, `temperature`, \
+`respiration`, `oxygen_saturation`, `weight`, `height`, `note` \
+(requires encounter context)
 
 ### Writable resource types
 
 Only the following resource types can be written via the manifest: \
-**Condition**, **MedicationRequest**, **AllergyIntolerance**, **Encounter**. \
-Other types (DocumentReference, CarePlan, Observation, etc.) are read-only \
-in OpenEMR and should NOT be included in manifest items.
+**Condition**, **MedicationRequest**, **AllergyIntolerance**, **Encounter**, \
+**SoapNote**, **Vital**. \
+Other types (DocumentReference, CarePlan, Observation, ServiceRequest, etc.) \
+are read-only in OpenEMR and should NOT be included in manifest items.
 
 ### MedicationRequest write limitations
 
@@ -127,13 +133,20 @@ Document penicillin allergy per patient report
 </add>
 ```
 
-Create a note:
+Write a SOAP note:
 ```
-<add type="DocumentReference" doctype="Progress note" \
-content="S: Increased thirst x2wk. O: BMI 32, A1c 8.2%. \
-A: Uncontrolled T2DM. P: Increase metformin, endo referral." \
-src="Encounter/5">
+<add type="SoapNote" subjective="Increased thirst x2wk" \
+objective="BMI 32, A1c 8.2%" assessment="Uncontrolled T2DM" \
+plan="Increase metformin, endo referral" src="Encounter/5">
 SOAP note for diabetes follow-up
+</add>
+```
+
+Record vital signs:
+```
+<add type="Vital" bps="142" bpd="88" pulse="76" temperature="98.6" \
+oxygen_saturation="98" weight="187" src="Encounter/5">
+Record vital signs for office visit
 </add>
 ```
 

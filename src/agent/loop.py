@@ -465,7 +465,7 @@ class AgentLoop:
 
                 endpoint_id = patient_pid if uses_pid(dsl_item.resource_type) else patient_uuid
                 payload = to_openemr_rest(dsl_item, endpoint_id)
-                endpoint = get_rest_endpoint(dsl_item, endpoint_id)
+                endpoint = get_rest_endpoint(dsl_item, endpoint_id, encounter_id=encounter_id)
                 if item.action == ManifestAction.CREATE:
                     result = await self.openemr_client.api_call(
                         endpoint=endpoint,

@@ -152,6 +152,8 @@ class TestResourceTypeAliases:
             "DiagnosticReport",
             "Patient",
             "ServiceRequest",
+            "SoapNote",
+            "Vital",
         }
         for alias, resolved in _TYPE_ALIASES.items():
             assert resolved in known_types, f"Alias '{alias}' -> '{resolved}' unknown"

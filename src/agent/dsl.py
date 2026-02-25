@@ -115,6 +115,13 @@ _TYPE_ALIASES: dict[str, str] = {
     "servicerequest": "ServiceRequest",
     "service": "ServiceRequest",
     "order": "ServiceRequest",
+    "soapnote": "SoapNote",
+    "soap_note": "SoapNote",
+    "soap": "SoapNote",
+    "note": "SoapNote",
+    "vital": "Vital",
+    "vitals": "Vital",
+    "vitalsigns": "Vital",
 }
 
 

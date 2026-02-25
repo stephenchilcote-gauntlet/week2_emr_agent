@@ -34,11 +34,16 @@ _REST_PATH_MAP = {
     "MedicationRequest": "medication",
     "AllergyIntolerance": "allergy",
     "Encounter": "encounter",
+    "SoapNote": "soap_note",
+    "Vital": "vital",
 }
 
 # OpenEMR REST endpoints that use numeric PID instead of UUID in the path.
 # Most endpoints use :puuid but the medication endpoint uses :pid.
-_PID_ENDPOINTS = {"MedicationRequest"}
+_PID_ENDPOINTS = {"MedicationRequest", "SoapNote", "Vital"}
+
+# Endpoints that require an encounter ID in the path.
+_ENCOUNTER_ENDPOINTS = {"SoapNote", "Vital"}
 
 
 def can_rest_write(resource_type: str) -> bool:
@@ -51,15 +56,31 @@ def uses_pid(resource_type: str) -> bool:
     return resource_type in _PID_ENDPOINTS
 
 
-def get_rest_endpoint(item: DslItem, patient_id: str) -> str:
+def needs_encounter(resource_type: str) -> bool:
+    """Return True if the endpoint requires an encounter ID in the path."""
+    return resource_type in _ENCOUNTER_ENDPOINTS
+
+
+def get_rest_endpoint(
+    item: DslItem, patient_id: str, *, encounter_id: str | None = None,
+) -> str:
     """Return the OpenEMR REST API endpoint path for this item.
 
     ``patient_id`` should be the numeric PID or FHIR UUID depending on
     the resource type.  Use :func:`uses_pid` to determine which to pass.
+
+    For encounter-scoped types (SoapNote, Vital), ``encounter_id`` is
+    required and the path includes ``encounter/{encounter_id}``.
     """
     rest_path = _REST_PATH_MAP.get(item.resource_type)
     if rest_path is None:
         raise ValueError(f"No REST endpoint defined for {item.resource_type}")
+    if item.resource_type in _ENCOUNTER_ENDPOINTS:
+        if not encounter_id:
+            raise ValueError(
+                f"{item.resource_type} requires an encounter_id but none was provided"
+            )
+        return f"patient/{patient_id}/encounter/{encounter_id}/{rest_path}"
     return f"patient/{patient_id}/{rest_path}"
 
 
@@ -205,6 +226,30 @@ def _build_encounter_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     }
 
 
+def _build_soap_note_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
+    """Build an OpenEMR REST soap_note payload from DSL attributes."""
+    attrs = item.attrs
+    return {
+        "subjective": attrs.get("subjective", ""),
+        "objective": attrs.get("objective", ""),
+        "assessment": attrs.get("assessment", ""),
+        "plan": attrs.get("plan", ""),
+    }
+
+
+def _build_vital_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
+    """Build an OpenEMR REST vital payload from DSL attributes."""
+    attrs = item.attrs
+    result = {}
+    for field in ("bps", "bpd", "weight", "height", "temperature",
+                  "temp_method", "pulse", "respiration", "note",
+                  "waist_circ", "head_circ", "oxygen_saturation"):
+        val = attrs.get(field)
+        if val is not None:
+            result[field] = val
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Builder registry
 # ---------------------------------------------------------------------------
@@ -214,4 +259,6 @@ _REST_BUILDERS = {
     "MedicationRequest": _build_medication_rest,
     "AllergyIntolerance": _build_allergy_rest,
     "Encounter": _build_encounter_rest,
+    "SoapNote": _build_soap_note_rest,
+    "Vital": _build_vital_rest,
 }
