@@ -404,6 +404,21 @@ class AgentLoop:
             patient_pid = session.page_context.patient_id or patient_pid
         encounter_id = session.manifest.encounter_id
 
+        # Pre-cache UUID→list-ID mappings for PID-based endpoints.
+        # Must happen BEFORE any creates, because REST POST creates
+        # medication records without UUIDs, and the list endpoint 500s
+        # if any record has a null UUID.
+        uuid_to_record: dict[str, dict] = {}
+        for rtype, rest_path in (("MedicationRequest", "medication"),):
+            if not uses_pid(rtype):
+                continue
+            ep = f"patient/{patient_pid}/{rest_path}"
+            entries = await self.openemr_client.api_call(ep)
+            if isinstance(entries, list):
+                for entry in entries:
+                    if entry.get("uuid"):
+                        uuid_to_record[entry["uuid"]] = entry
+
         failed_ids: set[str] = set()
         completed = 0
         failed = 0
@@ -457,34 +472,67 @@ class AgentLoop:
                         payload=payload,
                     )
                 elif item.action == ManifestAction.UPDATE:
-                    resource_id = item.target_resource_id or (
+                    fhir_uuid = item.target_resource_id or (
                         item.proposed_value.get("ref", "").split("/")[-1]
                         if item.proposed_value.get("ref") else None
                     )
-                    if not resource_id:
+                    if not fhir_uuid:
                         raise ValueError(
                             f"Cannot update {dsl_item.resource_type}: "
                             "no target resource ID (ref or target_resource_id)"
                         )
                     if uses_pid(dsl_item.resource_type):
-                        resource_id = await self._resolve_list_id(
-                            endpoint, resource_id,
-                        )
-                    endpoint = f"{endpoint}/{resource_id}"
-                    existing = await self.openemr_client.api_call(
-                        endpoint=endpoint,
-                    )
-                    if isinstance(existing, dict) and "error" not in existing:
+                        cached = uuid_to_record.get(fhir_uuid)
+                        if not cached:
+                            raise ValueError(
+                                f"Cannot resolve {dsl_item.resource_type} "
+                                f"UUID {fhir_uuid} to a list ID"
+                            )
+                        resource_id = str(cached["id"])
+                        # Merge proposed changes onto existing record
+                        # to preserve fields the LLM didn't include
+                        # (e.g. drug name when only dose changed).
                         merged = {
-                            k: v for k, v in existing.items()
+                            k: v for k, v in cached.items()
                             if k not in ("id", "uuid", "pid")
                         }
                         merged.update(
-                            {k: v for k, v in payload.items() if v is not None}
+                            {k: v for k, v in payload.items()
+                             if v is not None}
                         )
+                        # When dose/route changed but no drug name was
+                        # given, the translator omits title. Rebuild it
+                        # from the existing drug name + new dose/route.
+                        if (
+                            payload.get("title") is None
+                            and dsl_item.resource_type == "MedicationRequest"
+                            and (dsl_item.attrs.get("dose")
+                                 or dsl_item.attrs.get("route"))
+                        ):
+                            existing_title = cached.get("title", "")
+                            dose = dsl_item.attrs.get("dose", "")
+                            route = dsl_item.attrs.get("route", "")
+                            # Extract drug name by stripping the old dose info
+                            # (everything before the first digit cluster)
+                            import re
+                            drug_match = re.match(
+                                r"^([A-Za-z/+\- ]+?)(?:\s+\d|$)",
+                                existing_title,
+                            )
+                            drug = drug_match.group(1).strip() if drug_match else existing_title
+                            new_title = drug
+                            if dose:
+                                new_title = f"{new_title} {dose}"
+                            if route:
+                                new_title = f"{new_title} {route}"
+                            merged["title"] = new_title.strip()
                         payload = merged
+                    else:
+                        resource_id = fhir_uuid
+
+                    update_endpoint = f"{endpoint}/{resource_id}"
                     result = await self.openemr_client.api_call(
-                        endpoint=endpoint,
+                        endpoint=update_endpoint,
                         method="PUT",
                         payload=payload,
                     )
