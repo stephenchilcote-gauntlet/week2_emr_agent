@@ -6,9 +6,11 @@ import json
 import re
 from typing import Any
 
+from opentelemetry import trace
 from pydantic import BaseModel, Field
 
 from ..agent.models import ChangeManifest, ManifestItem
+from ..observability.tracing import trace_verification
 from .icd10 import validate_cpt_format, validate_icd10_format
 
 HEDGING_PHRASES = [
@@ -79,8 +81,17 @@ async def check_grounding(
     resource_type, resource_id = match.group(1), match.group(2)
 
     try:
-        result = await openemr_client.read(resource_type, resource_id)
-        if result is None:
+        result = await openemr_client.fhir_read(resource_type, {"_id": resource_id})
+        if not isinstance(result, dict):
+            return VerificationResult(
+                item_id=item.id,
+                check_name="grounding",
+                passed=False,
+                message=(
+                    f"Source resource lookup for {item.source_reference} returned malformed data"
+                ),
+            )
+        if "error" in result or result.get("total", 0) == 0:
             return VerificationResult(
                 item_id=item.id,
                 check_name="grounding",
@@ -200,7 +211,7 @@ def check_confidence(item: ManifestItem) -> VerificationResult:
         check_name="confidence",
         passed=True,
         message="No hedging language detected",
-        severity="info",
+        severity="warning",
     )
 
 
@@ -218,8 +229,8 @@ async def check_conflict(
         )
 
     try:
-        live = await openemr_client.read(item.resource_type, item.target_resource_id)
-        if live is None:
+        live = await openemr_client.fhir_read(item.resource_type, {"_id": item.target_resource_id})
+        if "error" in live or live.get("total", 0) == 0:
             return VerificationResult(
                 item_id=item.id,
                 check_name="conflict",
@@ -227,8 +238,24 @@ async def check_conflict(
                 message=f"Target resource {item.resource_type}/{item.target_resource_id} no longer exists",
             )
 
-        live_data = live if isinstance(live, dict) else {}
-        if live_data != item.current_value:
+        live_data = live.get("entry", [{}])[0].get("resource", {}) if live.get("entry") else {}
+        current_value = item.current_value or {}
+
+        # Prefer optimistic-locking style conflict checks when version IDs are available.
+        live_version = ((live_data.get("meta") or {}).get("versionId"))
+        current_version = ((current_value.get("meta") or {}).get("versionId"))
+        if live_version and current_version and live_version != current_version:
+            return VerificationResult(
+                item_id=item.id,
+                check_name="conflict",
+                passed=False,
+                message=(
+                    f"Conflict detected: {item.resource_type}/{item.target_resource_id} "
+                    "version has changed since the manifest was built"
+                ),
+            )
+
+        if _normalize_for_conflict(live_data) != _normalize_for_conflict(current_value):
             return VerificationResult(
                 item_id=item.id,
                 check_name="conflict",
@@ -269,6 +296,9 @@ async def verify_manifest(
     return report
 
 
+verify_manifest = trace_verification(trace.get_tracer("openemr-agent"))(verify_manifest)
+
+
 def _extract_code(code_value: Any) -> str | None:
     """Extract a code string from a FHIR CodeableConcept or plain string."""
     if isinstance(code_value, str):
@@ -276,8 +306,23 @@ def _extract_code(code_value: Any) -> str | None:
     if isinstance(code_value, dict):
         if "coding" in code_value and isinstance(code_value["coding"], list):
             for coding in code_value["coding"]:
-                if isinstance(coding, dict) and "code" in coding:
+                if isinstance(coding, dict) and isinstance(coding.get("code"), str):
                     return coding["code"]
-        if "code" in code_value:
+        if isinstance(code_value.get("code"), str):
             return code_value["code"]
     return None
+
+
+def _normalize_for_conflict(resource: dict[str, Any]) -> dict[str, Any]:
+    """Ignore server-managed metadata fields when checking for conflicts."""
+    normalized = dict(resource)
+    meta = normalized.get("meta")
+    if isinstance(meta, dict):
+        meta_copy = dict(meta)
+        meta_copy.pop("lastUpdated", None)
+        meta_copy.pop("versionId", None)
+        if meta_copy:
+            normalized["meta"] = meta_copy
+        else:
+            normalized.pop("meta", None)
+    return normalized

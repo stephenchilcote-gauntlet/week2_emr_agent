@@ -8,6 +8,8 @@ from src.agent.models import ChangeManifest, ManifestAction, ManifestItem
 from src.verification.checks import (
     VerificationReport,
     VerificationResult,
+    _extract_code,
+    _normalize_for_conflict,
     check_confidence,
     check_conflict,
     check_constraints,
@@ -15,6 +17,9 @@ from src.verification.checks import (
     verify_manifest,
 )
 from src.verification.icd10 import validate_cpt_format, validate_icd10_format
+
+CONDITION_FHIR_UUID = "cccccccc-1111-2222-3333-444444444444"
+ENCOUNTER_FHIR_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 
 # ------------------------------------------------------------------
@@ -73,7 +78,7 @@ class TestConfidenceCheck:
     def test_no_hedging(self, sample_manifest_item):
         result = check_confidence(sample_manifest_item)
         assert result.passed is True
-        assert result.severity == "info"
+        assert result.severity == "warning"
 
     def test_hedging_in_description(self):
         item = ManifestItem(
@@ -212,6 +217,33 @@ class TestConstraintValidation:
         doc_result = next(r for r in results if r.check_name == "constraint_document_sections")
         assert doc_result.passed is True
 
+    def test_document_key_triggers_document_section_check(self):
+        item = ManifestItem(
+            resource_type="DocumentReference",
+            action=ManifestAction.CREATE,
+            proposed_value={"document": "Subjective only"},
+            source_reference="Encounter/1",
+            description="Clinical note",
+        )
+        results = check_constraints(item)
+        doc_result = next(r for r in results if r.check_name == "constraint_document_sections")
+        assert doc_result.passed is False
+        assert "objective" in doc_result.message
+
+    def test_document_key_with_full_sections_passes(self):
+        item = ManifestItem(
+            resource_type="DocumentReference",
+            action=ManifestAction.CREATE,
+            proposed_value={
+                "document": "Subjective: headache. Objective: BP 120/80. Assessment: migraine. Plan: rest."
+            },
+            source_reference="Encounter/1",
+            description="Clinical note",
+        )
+        results = check_constraints(item)
+        doc_result = next(r for r in results if r.check_name == "constraint_document_sections")
+        assert doc_result.passed is True
+
 
 # ------------------------------------------------------------------
 # Grounding check
@@ -223,11 +255,25 @@ class TestGroundingCheck:
         result = await check_grounding(sample_manifest_item, mock_openemr_client)
         assert result.passed is True
         assert result.check_name == "grounding"
-        mock_openemr_client.read.assert_called_once_with("Encounter", "5")
+        mock_openemr_client.fhir_read.assert_called_once_with("Encounter", {"_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"})
 
     @pytest.mark.asyncio
     async def test_grounding_not_found(self, sample_manifest_item, mock_openemr_client):
-        mock_openemr_client.read.return_value = None
+        mock_openemr_client.fhir_read.return_value = {"total": 0, "entry": []}
+        result = await check_grounding(sample_manifest_item, mock_openemr_client)
+        assert result.passed is False
+        assert "not found" in result.message
+
+    @pytest.mark.asyncio
+    async def test_grounding_treats_error_payload_as_missing(self, sample_manifest_item, mock_openemr_client):
+        mock_openemr_client.fhir_read.return_value = {"error": "bad gateway", "total": 1}
+        result = await check_grounding(sample_manifest_item, mock_openemr_client)
+        assert result.passed is False
+        assert "not found" in result.message
+
+    @pytest.mark.asyncio
+    async def test_grounding_defaults_missing_total_to_not_found(self, sample_manifest_item, mock_openemr_client):
+        mock_openemr_client.fhir_read.return_value = {}
         result = await check_grounding(sample_manifest_item, mock_openemr_client)
         assert result.passed is False
         assert "not found" in result.message
@@ -260,7 +306,7 @@ class TestGroundingCheck:
 
     @pytest.mark.asyncio
     async def test_grounding_client_error(self, sample_manifest_item, mock_openemr_client):
-        mock_openemr_client.read.side_effect = Exception("connection refused")
+        mock_openemr_client.fhir_read.side_effect = Exception("connection refused")
         result = await check_grounding(sample_manifest_item, mock_openemr_client)
         assert result.passed is False
         assert "Failed to fetch" in result.message
@@ -278,20 +324,78 @@ class TestConflictCheck:
             resource_type="Condition",
             action=ManifestAction.CREATE,
             proposed_value={"code": "I10"},
-            source_reference="Encounter/1",
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
             description="New condition",
         )
-        # ManifestItem has no target_resource_id field, so accessing it
-        # will raise AttributeError — check_conflict guards with hasattr-like logic.
-        # Since the model doesn't define target_resource_id, this will raise.
-        # We test by catching the expected behavior.
-        try:
-            result = await check_conflict(item, mock_openemr_client)
-            # If it passes (returns a result), it should be info-level pass
-            assert result.passed is True
-        except AttributeError:
-            # Expected: ManifestItem doesn't have target_resource_id
-            pass
+        result = await check_conflict(item, mock_openemr_client)
+        assert result.passed is True
+
+    @pytest.mark.asyncio
+    async def test_no_conflict_when_current_value_missing(self, mock_openemr_client):
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.UPDATE,
+            proposed_value={"code": "I10"},
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+            description="Update condition",
+            target_resource_id=CONDITION_FHIR_UUID,
+            current_value=None,
+        )
+        result = await check_conflict(item, mock_openemr_client)
+        assert result.passed is True
+        assert "No conflict check needed" in result.message
+
+    @pytest.mark.asyncio
+    async def test_conflict_fails_when_live_read_returns_error(self, mock_openemr_client):
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.UPDATE,
+            proposed_value={"code": "I10"},
+            current_value={"resourceType": "Condition", "id": CONDITION_FHIR_UUID, "code": "E11.9"},
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+            description="Update condition",
+            target_resource_id=CONDITION_FHIR_UUID,
+        )
+        mock_openemr_client.fhir_read.return_value = {"error": "upstream timeout", "total": 1}
+        result = await check_conflict(item, mock_openemr_client)
+        assert result.passed is False
+        assert "no longer exists" in result.message
+
+    @pytest.mark.asyncio
+    async def test_conflict_defaults_missing_total_to_missing_resource(self, mock_openemr_client):
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.UPDATE,
+            proposed_value={"code": "I10"},
+            current_value={"resourceType": "Condition", "id": CONDITION_FHIR_UUID, "code": "E11.9"},
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+            description="Update condition",
+            target_resource_id=CONDITION_FHIR_UUID,
+        )
+        mock_openemr_client.fhir_read.return_value = {"entry": [{"resource": {"resourceType": "Condition", "id": CONDITION_FHIR_UUID}}]}
+        result = await check_conflict(item, mock_openemr_client)
+        assert result.passed is False
+        assert "no longer exists" in result.message
+
+    @pytest.mark.asyncio
+    async def test_conflict_detected_on_version_change(self, mock_openemr_client):
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.UPDATE,
+            proposed_value={"code": "I10"},
+            current_value={"resourceType": "Condition", "id": CONDITION_FHIR_UUID, "meta": {"versionId": "1"}},
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+            description="Update diagnosis",
+            target_resource_id=CONDITION_FHIR_UUID,
+        )
+        mock_openemr_client.fhir_read.return_value = {
+            "resourceType": "Bundle",
+            "total": 1,
+            "entry": [{"resource": {"resourceType": "Condition", "id": CONDITION_FHIR_UUID, "meta": {"versionId": "2"}}}],
+        }
+        result = await check_conflict(item, mock_openemr_client)
+        assert result.passed is False
+        assert "version has changed" in result.message
 
     @pytest.mark.asyncio
     async def test_conflict_detected(self, mock_openemr_client):
@@ -300,31 +404,31 @@ class TestConflictCheck:
             resource_type="Condition",
             action=ManifestAction.UPDATE,
             proposed_value={"code": "I10"},
-            current_value={"code": "E11.9", "id": "42"},
-            source_reference="Encounter/1",
+            current_value={"resourceType": "Condition", "code": "E11.9", "id": CONDITION_FHIR_UUID},
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
             description="Update diagnosis",
+            target_resource_id=CONDITION_FHIR_UUID,
         )
-        # Manually set target_resource_id since the model doesn't define it
-        object.__setattr__(item, "target_resource_id", "42")
-        mock_openemr_client.read.return_value = {"code": "J45.909", "id": "42"}
+        mock_openemr_client.fhir_read.return_value = {"resourceType": "Bundle", "total": 1, "entry": [{"resource": {"resourceType": "Condition", "code": "J45.909", "id": CONDITION_FHIR_UUID}}]}
         result = await check_conflict(item, mock_openemr_client)
         assert result.passed is False
         assert "Conflict detected" in result.message
+        mock_openemr_client.fhir_read.assert_called_once_with("Condition", {"_id": CONDITION_FHIR_UUID})
 
     @pytest.mark.asyncio
     async def test_no_conflict(self, mock_openemr_client):
         """When live data matches current_value, no conflict."""
-        current = {"code": "E11.9", "id": "42"}
+        current = {"resourceType": "Condition", "code": "E11.9", "id": CONDITION_FHIR_UUID}
         item = ManifestItem(
             resource_type="Condition",
             action=ManifestAction.UPDATE,
             proposed_value={"code": "I10"},
             current_value=current,
-            source_reference="Encounter/1",
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
             description="Update diagnosis",
+            target_resource_id=CONDITION_FHIR_UUID,
         )
-        object.__setattr__(item, "target_resource_id", "42")
-        mock_openemr_client.read.return_value = current
+        mock_openemr_client.fhir_read.return_value = {"resourceType": "Bundle", "total": 1, "entry": [{"resource": current}]}
         result = await check_conflict(item, mock_openemr_client)
         assert result.passed is True
         assert "unchanged" in result.message
@@ -337,11 +441,6 @@ class TestConflictCheck:
 class TestVerifyManifest:
     @pytest.mark.asyncio
     async def test_full_verification(self, sample_change_manifest, mock_openemr_client):
-        # check_conflict accesses item.target_resource_id which isn't on the model;
-        # patch each item so the attribute exists and the full pipeline can run.
-        for item in sample_change_manifest.items:
-            object.__setattr__(item, "target_resource_id", None)
-
         report = await verify_manifest(sample_change_manifest, mock_openemr_client)
         assert report.manifest_id == sample_change_manifest.id
         assert len(report.results) > 0
@@ -412,3 +511,41 @@ class TestVerificationReport:
         report = VerificationReport(manifest_id="m1")
         assert report.passed is True
         assert report.warnings == []
+
+
+class TestExtractCode:
+    def test_extract_code_from_direct_code_key(self):
+        assert _extract_code({"code": "E11.9"}) == "E11.9"
+
+    def test_extract_code_missing_key_returns_none(self):
+        assert _extract_code({"display": "Hypertension"}) is None
+
+    def test_extract_code_ignores_non_dict_coding_entries(self):
+        assert _extract_code({"coding": ["code"]}) is None
+
+
+class TestNormalizeForConflict:
+    def test_normalize_removes_only_server_managed_meta_fields(self):
+        normalized = _normalize_for_conflict(
+            {
+                "id": CONDITION_FHIR_UUID,
+                "meta": {
+                    "versionId": "2",
+                    "lastUpdated": "2024-01-01T00:00:00Z",
+                    "source": "upstream",
+                },
+            }
+        )
+        assert normalized["meta"] == {"source": "upstream"}
+
+    def test_normalize_drops_empty_meta_after_cleanup(self):
+        normalized = _normalize_for_conflict(
+            {
+                "id": CONDITION_FHIR_UUID,
+                "meta": {
+                    "versionId": "2",
+                    "lastUpdated": "2024-01-01T00:00:00Z",
+                },
+            }
+        )
+        assert "meta" not in normalized
