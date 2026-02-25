@@ -11,8 +11,32 @@ from typing import Any, Callable
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.trace import Tracer
+
+
+class _NoopExporter(SpanExporter):
+    def export(self, spans: Any) -> SpanExportResult:
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        return None
+
+
+ALLOWED_TRACE_KEYS = {
+    "id",
+    "item_id",
+    "patient_id",
+    "encounter_id",
+    "resource_id",
+    "resource_type",
+    "ref",
+    "source_reference",
+    "target_resource_id",
+    "endpoint",
+    "method",
+    "action",
+}
 
 
 def setup_tracing(service_name: str = "openemr-agent") -> Tracer:
@@ -39,7 +63,7 @@ def setup_tracing(service_name: str = "openemr-agent") -> Tracer:
             exporter = None
 
     if exporter is None:
-        exporter = ConsoleSpanExporter()
+        exporter = _NoopExporter()
 
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
@@ -58,7 +82,10 @@ def trace_tool_call(tracer: Tracer) -> Callable:
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             with tracer.start_as_current_span(f"tool.{func.__name__}") as span:
                 span.set_attribute("tool.name", func.__name__)
-                span.set_attribute("tool.arguments", json.dumps(kwargs, default=str))
+                span.set_attribute(
+                    "tool.arguments",
+                    json.dumps(_sanitize_tool_args(kwargs), default=str),
+                )
                 try:
                     result = await func(*args, **kwargs)
                     span.set_attribute("tool.success", True)
@@ -72,7 +99,10 @@ def trace_tool_call(tracer: Tracer) -> Callable:
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             with tracer.start_as_current_span(f"tool.{func.__name__}") as span:
                 span.set_attribute("tool.name", func.__name__)
-                span.set_attribute("tool.arguments", json.dumps(kwargs, default=str))
+                span.set_attribute(
+                    "tool.arguments",
+                    json.dumps(_sanitize_tool_args(kwargs), default=str),
+                )
                 try:
                     result = func(*args, **kwargs)
                     span.set_attribute("tool.success", True)
@@ -222,3 +252,20 @@ def _set_verification_attributes(span: Any, result: Any) -> None:
         span.set_attribute("verification.item_count", len(result.results))
     elif isinstance(result, list):
         span.set_attribute("verification.item_count", len(result))
+
+
+def _sanitize_tool_args(value: Any) -> Any:
+    """Only keep identifier-like keys to avoid emitting PHI content."""
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in ALLOWED_TRACE_KEYS:
+                sanitized[key] = _sanitize_tool_args(item)
+            elif isinstance(item, (dict, list)):
+                nested = _sanitize_tool_args(item)
+                if nested:
+                    sanitized[key] = nested
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_tool_args(item) for item in value]
+    return value
