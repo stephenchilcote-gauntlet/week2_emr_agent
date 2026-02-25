@@ -43,12 +43,31 @@ class EvalReport(BaseModel):
 class EvalRunner:
     def __init__(self, agent_url: str = "http://localhost:8000"):
         self.agent_url = agent_url.rstrip("/")
+        self.user_id = "eval-user"
         self.dataset = self._load_dataset()
 
     def _load_dataset(self) -> list[dict]:
         dataset_path = Path(__file__).parent / "dataset.json"
         with open(dataset_path) as f:
-            return json.load(f)
+            dataset = json.load(f)
+        self._validate_dataset(dataset)
+        return dataset
+
+    @staticmethod
+    def _validate_dataset(dataset: list[dict]) -> None:
+        for case in dataset:
+            expected = case.get("expected", {})
+            assertion_keys = {
+                "should_refuse",
+                "output_contains",
+                "output_not_contains",
+                "manifest_items",
+                "manifest_patient_is_uuid",
+                "tool_calls",
+            }
+            has_assertions = bool(assertion_keys.intersection(expected.keys()))
+            if not has_assertions:
+                raise ValueError(f"Eval case {case.get('id', '<unknown>')} has no assertions")
 
     async def run_case(self, case: dict) -> EvalResult:
         """Run a single eval case against the agent."""
@@ -62,6 +81,7 @@ class EvalRunner:
                 # Send chat message
                 resp = await client.post(
                     f"{self.agent_url}/api/chat",
+                    headers={"openemr_user_id": self.user_id},
                     json={
                         "message": case["input"]["message"],
                         "page_context": case["input"].get("page_context"),
@@ -105,6 +125,18 @@ class EvalRunner:
                         checks[key] = phrase.lower() not in response_text
                     details["output_not_contains"] = {p: p.lower() not in response_text for p in expected["output_not_contains"]}
 
+                # Check: manifest_patient_is_uuid
+                if expected.get("manifest_patient_is_uuid") and manifest:
+                    patient_id = manifest.get("patient_id", "") if isinstance(manifest, dict) else ""
+                    import re as _re
+                    is_uuid = bool(_re.match(
+                        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                        patient_id,
+                        _re.IGNORECASE,
+                    ))
+                    checks["manifest_patient_is_uuid"] = is_uuid
+                    details["manifest_patient_id"] = patient_id
+
                 # Check: manifest_items
                 if expected.get("manifest_items") and manifest:
                     manifest_items = manifest.get("items", []) if isinstance(manifest, dict) else []
@@ -122,7 +154,15 @@ class EvalRunner:
 
                 # Check: tool_calls (from response metadata if available)
                 if expected.get("tool_calls"):
+                    actual_tools = [
+                        item["name"]
+                        for item in (data.get("tool_calls_summary") or [])
+                        if isinstance(item, dict) and "name" in item
+                    ]
+                    for tool in expected["tool_calls"]:
+                        checks[f"tool_called_{tool}"] = tool in actual_tools
                     details["expected_tools"] = expected["tool_calls"]
+                    details["actual_tools"] = actual_tools
 
         except Exception as e:
             error = str(e)
