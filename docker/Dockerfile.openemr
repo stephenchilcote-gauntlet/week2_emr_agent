@@ -1,0 +1,14 @@
+FROM openemr/openemr:flex
+
+# Copy pre-built OpenEMR source (includes vendor/, node_modules/, built assets)
+COPY --chown=apache:apache ./openemr/ /var/www/localhost/htdocs/openemr/
+
+# Skip the git clone at startup. Create empty /openemr so the
+# EASY_DEV_MODE_NEW rsync is a harmless no-op (--ignore-existing).
+ENV EASY_DEV_MODE_NEW=yes
+RUN mkdir -p /openemr /couchdb/data
+
+# Wrapper script that installs Let's Encrypt certs before openemr.sh runs ssl.sh
+COPY docker/start.sh /var/www/localhost/htdocs/start.sh
+RUN chmod +x /var/www/localhost/htdocs/start.sh
+CMD ["./start.sh"]

@@ -22,7 +22,9 @@ services:
       retries: 10
 
   openemr:
-    image: openemr/openemr:flex
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.openemr
     restart: unless-stopped
     ports:
       - "80:80"
@@ -37,8 +39,6 @@ services:
       MANUAL_SETUP: 0
       DEMO_MODE: standard
       OPENEMR_AGENT_API_URL: http://agent:8000
-      FLEX_REPOSITORY: https://github.com/stephenchilcote-gauntlet/openemr.git
-      FLEX_REPOSITORY_BRANCH: master
     volumes:
       - openemr_sites:/var/www/localhost/htdocs/openemr/sites
       - openemr_logs:/var/log
@@ -62,6 +62,7 @@ services:
       OPENEMR_CLIENT_ID: ${OPENEMR_CLIENT_ID}
       OPENEMR_CLIENT_SECRET: ${OPENEMR_CLIENT_SECRET}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     volumes:
       - ./data:/app/data

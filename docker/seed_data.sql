@@ -151,3 +151,22 @@ INSERT INTO `forms` (
 (90003, 90003, 90003, 'New Patient Encounter', 'newpatient', 5, '2025-02-10 14:00:00'),
 (90004, 90004, 90004, 'New Patient Encounter', 'newpatient', 6, '2025-03-05 11:00:00')
 ON DUPLICATE KEY UPDATE `form_name` = VALUES(`form_name`);
+
+
+-- ============================================================
+-- Module registration: Clinical Assistant sidebar
+-- ============================================================
+
+INSERT INTO `modules` (
+  `mod_name`, `mod_directory`, `mod_parent`, `mod_type`,
+  `mod_active`, `mod_ui_name`, `mod_relative_link`,
+  `mod_ui_order`, `mod_ui_active`, `mod_description`,
+  `mod_nick_name`, `mod_enc_menu`, `directory`, `date`,
+  `sql_run`, `type`, `sql_version`, `acl_version`
+) VALUES (
+  'ClinicalAssistant', 'oe-module-clinical-assistant', '', '',
+  1, 'Clinical Assistant', '',
+  0, 1, 'Clinical Assistant Sidebar',
+  '', 'no', '', NOW(),
+  0, 0, '', ''
+) ON DUPLICATE KEY UPDATE `mod_active` = 1, `mod_ui_active` = 1;

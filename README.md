@@ -2,6 +2,41 @@
 
 An AI-powered clinical workflow assistant embedded in OpenEMR. The agent reads patient records via FHIR R4, reasons about clinical tasks, and proposes changes through a **plan-then-confirm** workflow — no writes execute without clinician approval.
 
+## Quick Start
+
+### Deployment
+
+```bash
+# 1. Start Docker
+sudo systemctl start docker
+
+# 2. Install dependencies
+uv sync
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env and set ANTHROPIC_API_KEY
+
+# 4. Start services (OpenEMR + MySQL + Jaeger + Agent)
+docker compose up -d
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Access
+
+| Service | URL | Username | Password |
+|---------|-----|----------|----------|
+| **OpenEMR** | http://localhost | `admin` | `pass` |
+| **Agent API** | http://localhost:8000 | — | — |
+| **Jaeger Tracing** | http://localhost:16686 | — | — |
+
+### Health Check
+
+```bash
+curl http://localhost:8000/api/health
+curl http://localhost/apis/default/fhir/metadata
+```
+
 ## Architecture
 
 ```

@@ -20,7 +20,9 @@ services:
       retries: 10
 
   openemr:
-    image: openemr/openemr:flex
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.openemr
     restart: unless-stopped
     ports:
       - "80:80"
@@ -35,11 +37,10 @@ services:
       MANUAL_SETUP: 0
       DEMO_MODE: standard
       OPENEMR_AGENT_API_URL: http://agent:8000
-      FLEX_REPOSITORY: https://github.com/stephenchilcote-gauntlet/openemr.git
-      FLEX_REPOSITORY_BRANCH: master
     volumes:
       - openemr_sites:/var/www/localhost/htdocs/openemr/sites
       - openemr_logs:/var/log
+      - letsencrypt:/etc/letsencrypt
     depends_on:
       mysql:
         condition: service_healthy
@@ -54,11 +55,12 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      OPENEMR_BASE_URL: http://openemr:80
-      OPENEMR_FHIR_URL: http://openemr:80/apis/default/fhir
+      OPENEMR_BASE_URL: ${OPENEMR_BASE_URL:-http://openemr:80}
+      OPENEMR_FHIR_URL: ${OPENEMR_FHIR_URL:-http://openemr:80/apis/default/fhir}
       OPENEMR_CLIENT_ID: ${OPENEMR_CLIENT_ID}
       OPENEMR_CLIENT_SECRET: ${OPENEMR_CLIENT_SECRET}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
     volumes:
       - agent_data:/app/data
@@ -85,4 +87,5 @@ volumes:
   mysql_data:
   openemr_sites:
   openemr_logs:
+  letsencrypt:
   agent_data:

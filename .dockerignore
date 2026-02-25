@@ -1,0 +1,18 @@
+# OpenEMR - exclude git history (87MB) and test fixtures
+openemr/.git/
+openemr/tests/
+openemr/.github/
+openemr/ci/
+openemr/Documentation/
+openemr/.phpstan/
+
+# Agent - only need src/, web/, pyproject.toml, uv.lock for agent build
+# (agent Dockerfile handles its own COPY)
+
+# General
+.hypothesis/
+.pytest_cache/
+.venv/
+.mutmut-cache
+__pycache__/
+*.pyc
