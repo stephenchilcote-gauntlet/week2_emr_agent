@@ -12,3 +12,7 @@ build/
 htmlcov/
 .coverage
 openemr/
+.hypothesis/
+.mutmut-cache
+data/
+*.bak
