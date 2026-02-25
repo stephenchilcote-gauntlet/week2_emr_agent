@@ -25,6 +25,7 @@ from .translator import (
     dsl_item_to_proposed_value,
     get_rest_endpoint,
     to_openemr_rest,
+    uses_pid,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,8 @@ class AgentLoop:
         The loop calls the LLM, executes any tool calls, and repeats until the
         LLM produces a final text response or submits a manifest for review.
         """
+        otel_trace.get_current_span().set_attribute("session.id", session.id)
+
         session.messages.append(
             AgentMessage(role="user", content=user_message)
         )
@@ -291,9 +294,12 @@ class AgentLoop:
         """Execute a single tool call and return the result."""
         try:
             if tool_call.name == "fhir_read":
+                params = tool_call.arguments.get("params")
+                if params:
+                    params = self._resolve_fhir_params(params, session)
                 result = await self.openemr_client.fhir_read(
                     resource_type=tool_call.arguments["resource_type"],
-                    params=tool_call.arguments.get("params"),
+                    params=params,
                 )
                 if isinstance(result, dict) and "error" not in result:
                     session.label_registry.register_bundle(result)
@@ -387,11 +393,15 @@ class AgentLoop:
         if session.manifest is None:
             raise ValueError("No manifest to execute.")
 
+        otel_trace.get_current_span().set_attribute("session.id", session.id)
         session.phase = "executing"
         session.manifest.status = "executing"
 
         sorted_items = self._topological_sort(session.manifest.items)
-        patient_id = session.manifest.patient_id
+        patient_uuid = session.fhir_patient_id or session.manifest.patient_id
+        patient_pid = session.manifest.patient_id
+        if session.page_context:
+            patient_pid = session.page_context.patient_id or patient_pid
         encounter_id = session.manifest.encounter_id
 
         failed_ids: set[str] = set()
@@ -437,8 +447,9 @@ class AgentLoop:
                         f"No REST write path for {dsl_item.resource_type}"
                     )
 
-                payload = to_openemr_rest(dsl_item, patient_id)
-                endpoint = get_rest_endpoint(dsl_item, patient_id)
+                endpoint_id = patient_pid if uses_pid(dsl_item.resource_type) else patient_uuid
+                payload = to_openemr_rest(dsl_item, endpoint_id)
+                endpoint = get_rest_endpoint(dsl_item, endpoint_id)
                 if item.action == ManifestAction.CREATE:
                     result = await self.openemr_client.api_call(
                         endpoint=endpoint,
@@ -450,8 +461,28 @@ class AgentLoop:
                         item.proposed_value.get("ref", "").split("/")[-1]
                         if item.proposed_value.get("ref") else None
                     )
-                    if resource_id:
-                        endpoint = f"{endpoint}/{resource_id}"
+                    if not resource_id:
+                        raise ValueError(
+                            f"Cannot update {dsl_item.resource_type}: "
+                            "no target resource ID (ref or target_resource_id)"
+                        )
+                    if uses_pid(dsl_item.resource_type):
+                        resource_id = await self._resolve_list_id(
+                            endpoint, resource_id,
+                        )
+                    endpoint = f"{endpoint}/{resource_id}"
+                    existing = await self.openemr_client.api_call(
+                        endpoint=endpoint,
+                    )
+                    if isinstance(existing, dict) and "error" not in existing:
+                        merged = {
+                            k: v for k, v in existing.items()
+                            if k not in ("id", "uuid", "pid")
+                        }
+                        merged.update(
+                            {k: v for k, v in payload.items() if v is not None}
+                        )
+                        payload = merged
                     result = await self.openemr_client.api_call(
                         endpoint=endpoint,
                         method="PUT",
@@ -463,15 +494,31 @@ class AgentLoop:
                         item.proposed_value.get("ref", "").split("/")[-1]
                         if item.proposed_value.get("ref") else None
                     )
-                    if resource_id:
-                        endpoint = f"{endpoint}/{resource_id}"
+                    if not resource_id:
+                        raise ValueError(
+                            f"Cannot delete {dsl_item.resource_type}: "
+                            "no target resource ID (ref or target_resource_id)"
+                        )
+                    if uses_pid(dsl_item.resource_type):
+                        resource_id = await self._resolve_list_id(
+                            endpoint, resource_id,
+                        )
+                    endpoint = f"{endpoint}/{resource_id}"
                     result = await self.openemr_client.api_call(
                         endpoint=endpoint,
                         method="DELETE",
                     )
 
-                if isinstance(result, dict) and "error" in result:
-                    raise RuntimeError(result["error"])
+                if isinstance(result, dict):
+                    if "error" in result:
+                        raise RuntimeError(result["error"])
+                    if result.get("validationErrors"):
+                        raise RuntimeError(json.dumps(result["validationErrors"]))
+                    # Catch field-level validation errors (e.g. {"pid": {...}})
+                    if all(
+                        isinstance(v, dict) for v in result.values()
+                    ) and not result.get("data"):
+                        raise RuntimeError(json.dumps(result))
 
                 item.status = "completed"
                 item.execution_result = json.dumps(result, default=str)
@@ -564,12 +611,17 @@ class AgentLoop:
                 prompt += (
                     f"> Patient ID: {self._sanitize_context_field(ctx.patient_id)}\n"
                 )
+            if session.fhir_patient_id:
+                prompt += (
+                    f"> FHIR Patient UUID: {self._sanitize_context_field(session.fhir_patient_id)}"
+                    " (use this as the `patient` param in FHIR queries)\n"
+                )
             if ctx.encounter_id:
                 prompt += (
                     f"> Encounter ID: {self._sanitize_context_field(ctx.encounter_id)}\n"
                 )
             if ctx.page_type:
-                prompt += f"> Page: {self._sanitize_context_field(ctx.page_type)}\n"
+                prompt += f"> Active Tab: {self._sanitize_context_field(ctx.page_type)}\n"
 
             if ctx.visible_data:
                 prompt += self._render_visible_data(ctx.visible_data)
@@ -622,6 +674,44 @@ class AgentLoop:
         if len(result) > MAX_CHARS:
             result = result[:MAX_CHARS] + "\n> … (truncated)\n"
         return result
+
+    async def _resolve_list_id(
+        self, list_endpoint: str, fhir_uuid: str,
+    ) -> str:
+        """Resolve a FHIR UUID to a numeric OpenEMR list ID.
+
+        The medication REST endpoint uses numeric IDs (``lists.id``) rather
+        than UUIDs.  This fetches the list entries and finds the one whose
+        ``uuid`` field matches, returning its numeric ``id``.
+
+        Raises ``ValueError`` when the UUID cannot be found — this typically
+        means the FHIR resource lives in the ``prescriptions`` table (e.g.
+        Synthea imports) which is read-only via the REST API.
+        """
+        entries = await self.openemr_client.api_call(list_endpoint)
+        if isinstance(entries, list):
+            for entry in entries:
+                if entry.get("uuid") == fhir_uuid:
+                    return str(entry["id"])
+        raise ValueError(
+            f"FHIR resource {fhir_uuid} not found in REST endpoint "
+            f"{list_endpoint}. This medication may originate from a "
+            f"read-only source (e.g. prescriptions table) and cannot "
+            f"be modified via the REST API."
+        )
+
+    @staticmethod
+    def _resolve_fhir_params(
+        params: dict[str, str], session: AgentSession
+    ) -> dict[str, str]:
+        """Resolve three-word labels in FHIR query params to UUIDs."""
+        resolved = dict(params)
+        for key, value in resolved.items():
+            if isinstance(value, str) and is_label(value):
+                result = session.label_registry.resolve(value)
+                if result.get("ok"):
+                    resolved[key] = result["uuid"]
+        return resolved
 
     def _extract_tool_calls(
         self, response: anthropic.types.Message

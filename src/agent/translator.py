@@ -36,18 +36,31 @@ _REST_PATH_MAP = {
     "Encounter": "encounter",
 }
 
+# OpenEMR REST endpoints that use numeric PID instead of UUID in the path.
+# Most endpoints use :puuid but the medication endpoint uses :pid.
+_PID_ENDPOINTS = {"MedicationRequest"}
+
 
 def can_rest_write(resource_type: str) -> bool:
     """Return True if the given resource type has a REST write path."""
     return resource_type in _REST_PATH_MAP
 
 
-def get_rest_endpoint(item: DslItem, patient_uuid: str) -> str:
-    """Return the OpenEMR REST API endpoint path for this item."""
+def uses_pid(resource_type: str) -> bool:
+    """Return True if the endpoint for this resource type uses numeric PID."""
+    return resource_type in _PID_ENDPOINTS
+
+
+def get_rest_endpoint(item: DslItem, patient_id: str) -> str:
+    """Return the OpenEMR REST API endpoint path for this item.
+
+    ``patient_id`` should be the numeric PID or FHIR UUID depending on
+    the resource type.  Use :func:`uses_pid` to determine which to pass.
+    """
     rest_path = _REST_PATH_MAP.get(item.resource_type)
     if rest_path is None:
         raise ValueError(f"No REST endpoint defined for {item.resource_type}")
-    return f"patient/{patient_uuid}/{rest_path}"
+    return f"patient/{patient_id}/{rest_path}"
 
 
 # ---------------------------------------------------------------------------
@@ -78,20 +91,39 @@ def dsl_item_to_proposed_value(item: DslItem) -> dict[str, Any]:
 # OpenEMR REST builders
 # ---------------------------------------------------------------------------
 
+def _date_or_none(value: str | None) -> str | None:
+    """Return the value if it's a non-empty date string, otherwise None.
+
+    OpenEMR stores dates as DATETIME columns.  Sending an empty string
+    causes MariaDB to insert ``0000-00-00 00:00:00`` which is invisible
+    to the UI's ``dateEmptySql`` filter (it only matches NULL or
+    ``0000-00-00``).  Sending None produces a JSON null which the PHP
+    API binds as SQL NULL.
+    """
+    if value:
+        return value
+    return None
+
+
 def _build_condition_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     """Build an OpenEMR REST medical_problem payload from DSL attributes.
 
     Maps to: POST /apis/default/api/patient/{uuid}/medical_problem
     """
     attrs = item.attrs
+
+    begdate = _date_or_none(attrs.get("onset"))
+    if not begdate and item.action == "add":
+        from datetime import date
+        begdate = date.today().isoformat() + " 00:00:00"
+
+    # ConditionRestController whitelist: title, begdate, enddate, diagnosis.
+    # Other fields (occurrence, outcome, comments) are silently dropped.
     return {
         "title": attrs.get("display", ""),
         "diagnosis": f"ICD10:{attrs.get('code', '')}",
-        "begdate": attrs.get("onset", ""),
-        "enddate": attrs.get("enddate", ""),
-        "occurrence": attrs.get("occurrence", ""),
-        "outcome": "",
-        "comments": item.description,
+        "begdate": begdate,
+        "enddate": _date_or_none(attrs.get("enddate")),
     }
 
 
@@ -110,18 +142,22 @@ def _build_medication_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     if route:
         title = f"{title} {route}".strip()
 
-    result: dict[str, Any] = {
+    begdate = _date_or_none(attrs.get("begdate"))
+    if not begdate and item.action == "add":
+        from datetime import date
+        begdate = date.today().isoformat() + " 00:00:00"
+
+    enddate = _date_or_none(attrs.get("enddate"))
+    if attrs.get("status") == "stopped" and not enddate:
+        from datetime import date
+        enddate = date.today().isoformat() + " 00:00:00"
+
+    return {
         "title": title,
-        "begdate": attrs.get("begdate", ""),
-        "enddate": attrs.get("enddate", ""),
+        "begdate": begdate,
+        "enddate": enddate,
         "comments": item.description,
     }
-
-    if attrs.get("status") == "stopped":
-        from datetime import date
-        result["enddate"] = result["enddate"] or date.today().isoformat()
-
-    return result
 
 
 def _build_allergy_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
@@ -131,10 +167,16 @@ def _build_allergy_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     Schema: title (required), begdate (required), enddate, diagnosis
     """
     attrs = item.attrs
+
+    begdate = _date_or_none(attrs.get("begdate") or attrs.get("onset"))
+    if not begdate and item.action == "add":
+        from datetime import date
+        begdate = date.today().isoformat() + " 00:00:00"
+
     return {
         "title": attrs.get("substance", "") or attrs.get("display", "") or attrs.get("title", ""),
-        "begdate": attrs.get("begdate", attrs.get("onset", "")),
-        "enddate": attrs.get("enddate", ""),
+        "begdate": begdate,
+        "enddate": _date_or_none(attrs.get("enddate")),
         "comments": item.description,
     }
 
@@ -149,8 +191,8 @@ def _build_encounter_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     return {
         "pc_catid": attrs.get("category", ""),
         "reason": attrs.get("reason", description),
-        "date": attrs.get("date", ""),
-        "onset_date": attrs.get("onset", ""),
+        "date": _date_or_none(attrs.get("date")),
+        "onset_date": _date_or_none(attrs.get("onset")),
         "facility": attrs.get("facility", ""),
         "sensitivity": attrs.get("sensitivity", "normal"),
     }

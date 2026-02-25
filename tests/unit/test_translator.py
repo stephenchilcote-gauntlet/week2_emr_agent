@@ -8,9 +8,13 @@ from src.agent.translator import (
     dsl_item_to_proposed_value,
     get_rest_endpoint,
     to_openemr_rest,
+    uses_pid,
 )
 
-PATIENT_UUID = "uuid-pat-001"
+PATIENT_UUID = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+ENCOUNTER_FHIR_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+MEDREQ_FHIR_UUID = "dddddddd-2222-3333-4444-555555555555"
+CONDITION_FHIR_UUID = "cccccccc-1111-2222-3333-444444444444"
 
 
 def _make_item(**overrides) -> DslItem:
@@ -18,7 +22,7 @@ def _make_item(**overrides) -> DslItem:
         action="add",
         resource_type="Condition",
         description="test item",
-        source_reference="Encounter/5",
+        source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
         item_id="item-1",
         confidence="high",
         depends_on=[],
@@ -42,8 +46,10 @@ class TestConditionRest:
         assert result["title"] == "Type 2 DM"
         assert result["diagnosis"] == "ICD10:E11.9"
         assert result["begdate"] == "2024-01-15"
-        assert result["comments"] == "Add Type 2 diabetes"
-        assert result["outcome"] == ""
+        # ConditionRestController only whitelists: title, begdate, enddate, diagnosis
+        assert "comments" not in result
+        assert "occurrence" not in result
+        assert "outcome" not in result
 
     def test_unsupported_resource_raises(self):
         item = _make_item(resource_type="CarePlan")
@@ -64,14 +70,36 @@ class TestMedicationRest:
         assert result["title"] == "Metformin 500mg oral"
         assert result["comments"] == "Start metformin"
 
+    def test_new_medication_defaults_begdate_to_today(self):
+        from datetime import date
+        item = _make_item(
+            action="add",
+            resource_type="MedicationRequest",
+            description="Start aspirin",
+            attrs={"drug": "Aspirin", "dose": "81mg"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["begdate"] == date.today().isoformat() + " 00:00:00"
+
+    def test_edit_medication_no_default_begdate(self):
+        item = _make_item(
+            action="edit",
+            resource_type="MedicationRequest",
+            description="Update dose",
+            attrs={"drug": "Aspirin", "dose": "325mg"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["begdate"] is None
+
     def test_stopped_medication_sets_enddate(self):
+        from datetime import date
         item = _make_item(
             resource_type="MedicationRequest",
             description="Stop metformin",
             attrs={"drug": "Metformin", "status": "stopped"},
         )
         result = to_openemr_rest(item, PATIENT_UUID)
-        assert result["enddate"]  # non-empty
+        assert result["enddate"] == date.today().isoformat() + " 00:00:00"
 
 
 # ---- 3. AllergyIntolerance → OpenEMR REST ----
@@ -146,6 +174,22 @@ class TestCanRestWrite:
         assert can_rest_write("Observation") is False
 
 
+# ---- 5b. uses_pid ----
+
+class TestUsesPid:
+    def test_medication_uses_pid(self):
+        assert uses_pid("MedicationRequest") is True
+
+    def test_condition_uses_uuid(self):
+        assert uses_pid("Condition") is False
+
+    def test_allergy_uses_uuid(self):
+        assert uses_pid("AllergyIntolerance") is False
+
+    def test_encounter_uses_uuid(self):
+        assert uses_pid("Encounter") is False
+
+
 # ---- 6. get_rest_endpoint ----
 
 class TestGetRestEndpoint:
@@ -193,22 +237,22 @@ class TestDslItemToProposedValue:
     def test_edit_item_with_ref(self):
         item = _make_item(
             action="edit",
-            ref="MedicationRequest/123",
+            ref=f"MedicationRequest/{MEDREQ_FHIR_UUID}",
             attrs={"dose": "1000mg"},
         )
         result = dsl_item_to_proposed_value(item)
-        assert result["ref"] == "MedicationRequest/123"
+        assert result["ref"] == f"MedicationRequest/{MEDREQ_FHIR_UUID}"
         assert result["dose"] == "1000mg"
         assert "type" not in result
 
     def test_remove_item_with_ref(self):
         item = _make_item(
             action="remove",
-            ref="Condition/456",
+            ref=f"Condition/{CONDITION_FHIR_UUID}",
             attrs={},
         )
         result = dsl_item_to_proposed_value(item)
-        assert result["ref"] == "Condition/456"
+        assert result["ref"] == f"Condition/{CONDITION_FHIR_UUID}"
         assert "type" not in result
 
     def test_add_no_ref_in_result(self):
