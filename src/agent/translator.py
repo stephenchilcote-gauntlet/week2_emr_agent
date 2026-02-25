@@ -134,13 +134,20 @@ def _build_medication_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     Schema: title (required), begdate (required), enddate, diagnosis
     """
     attrs = item.attrs
-    title = attrs.get("drug", "") or attrs.get("display", "") or attrs.get("title", "")
+    drug = attrs.get("drug", "") or attrs.get("display", "") or attrs.get("title", "")
     dose = attrs.get("dose", "")
     route = attrs.get("route", "")
-    if dose:
-        title = f"{title} {dose}".strip()
-    if route:
-        title = f"{title} {route}".strip()
+
+    # Only build a title when we have a drug name, or when creating.
+    # For edits without a drug name, title is omitted so the executor's
+    # merge preserves the existing title from the cached record.
+    title: str | None = None
+    if drug or item.action == "add":
+        title = drug
+        if dose:
+            title = f"{title} {dose}".strip()
+        if route:
+            title = f"{title} {route}".strip()
 
     begdate = _date_or_none(attrs.get("begdate"))
     if not begdate and item.action == "add":
