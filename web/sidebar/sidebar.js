@@ -46,6 +46,8 @@ class SidebarApp {
   async start() {
     this.bindEvents()
     this.refreshContext()
+    this.showLoadingSkeleton()
+
     await this.loadSessionList()
 
     if (this.state.sessionID) {
@@ -61,6 +63,7 @@ class SidebarApp {
       await this.createSession()
     }
 
+    this.hideLoadingSkeleton()
     this.toggleSend(true)
   }
 
@@ -191,8 +194,8 @@ class SidebarApp {
       this.renderReviewPanel()
       this.updateSessionDisplay()
       await this.loadSessionList()
-    } catch (error) {
-      this.renderErrorBlock(`Failed to create a session: ${error.message}`)
+    } catch (_error) {
+      this.renderErrorBlock("Couldn't start a new conversation.", { onRetry: () => this.createSession(clearChat) })
       this.setStatus("error")
     }
   }
@@ -202,8 +205,8 @@ class SidebarApp {
       const sessions = await this.api("/api/sessions")
       this.state.sessions = sessions
       this.renderHistoryList()
-    } catch (error) {
-      this.renderErrorBlock(`Unable to load conversation history: ${error.message}`)
+    } catch (_error) {
+      this.renderErrorBlock("Couldn't load conversation history.")
     }
   }
 
@@ -332,9 +335,15 @@ class SidebarApp {
       this.renderReviewPanel()
       this.setStatus(this.phaseToStatus(data.phase))
       await this.loadSessionList()
-    } catch (error) {
+    } catch (_error) {
       this.hideTypingIndicator()
-      this.renderRetryableError(error.message)
+      this.renderErrorBlock("Something went wrong sending your message.", {
+        onRetry: () => {
+          if (this.lastUserMessage) {
+            this.sendMessage(this.lastUserMessage)
+          }
+        },
+      })
       this.setStatus("error")
     } finally {
       this.toggleSend(true)
@@ -425,29 +434,36 @@ class SidebarApp {
     this.scrollToBottom()
   }
 
-  renderRetryableError(text) {
+  renderErrorBlock(text, { onRetry = null } = {}) {
     const block = document.createElement("div")
     block.className = "error-block"
-    block.innerHTML = `<strong>Assistant error:</strong> ${this.escapeHtml(text)}`
-    const retry = document.createElement("button")
-    retry.textContent = "Retry"
-    retry.addEventListener("click", () => {
-      block.remove()
-      if (this.lastUserMessage) {
-        this.sendMessage(this.lastUserMessage)
-      }
-    })
-    block.appendChild(document.createElement("br"))
-    block.appendChild(retry)
+
+    const dismiss = document.createElement("button")
+    dismiss.className = "error-dismiss"
+    dismiss.textContent = "×"
+    dismiss.title = "Dismiss"
+    dismiss.addEventListener("click", () => block.remove())
+    block.appendChild(dismiss)
+
+    const msg = document.createElement("span")
+    msg.textContent = text
+    block.appendChild(msg)
+
+    if (onRetry) {
+      const actions = document.createElement("div")
+      actions.className = "error-actions"
+      const retry = document.createElement("button")
+      retry.textContent = "Try again"
+      retry.addEventListener("click", () => {
+        block.remove()
+        onRetry()
+      })
+      actions.appendChild(retry)
+      block.appendChild(actions)
+    }
+
     this.el.chatArea.appendChild(block)
     this.scrollToBottom()
-  }
-
-  renderErrorBlock(text) {
-    const block = document.createElement("div")
-    block.className = "error-block"
-    block.textContent = text
-    this.el.chatArea.appendChild(block)
   }
 
   renderSystemNotice(text) {
@@ -535,7 +551,7 @@ class SidebarApp {
           item.proposed_value = parsed
           modifiedItems.push({ id: item.id, proposed_value: parsed })
         } catch (_error) {
-          this.renderErrorBlock("Invalid JSON in modified value.")
+          this.renderErrorBlock("The modified value isn't valid. Please check and try again.")
           return
         }
       }
@@ -557,8 +573,8 @@ class SidebarApp {
         }),
       })
       this.renderReviewPanel()
-    } catch (error) {
-      this.renderErrorBlock(`Failed to update manifest review: ${error.message}`)
+    } catch (_error) {
+      this.renderErrorBlock("Couldn't save your review.", { onRetry: () => this.updateReviewItem(itemID, status, proposedValueText) })
     }
   }
 
@@ -593,8 +609,8 @@ class SidebarApp {
       this.state.pendingManifest = null
       this.renderReviewPanel()
       this.setStatus("ready")
-    } catch (error) {
-      this.renderErrorBlock(`Execution failed: ${error.message}`)
+    } catch (_error) {
+      this.renderErrorBlock("Couldn't apply the changes.", { onRetry: () => this.executeManifest() })
       this.setStatus("error")
     } finally {
       this.toggleSend(true)
@@ -673,6 +689,23 @@ class SidebarApp {
       "<code>$1</code>"
     )
     return rendered
+  }
+
+  showLoadingSkeleton() {
+    const skeleton = document.createElement("div")
+    skeleton.className = "loading-skeleton"
+    skeleton.id = "loading-skeleton"
+    for (let i = 0; i < 3; i++) {
+      const line = document.createElement("div")
+      line.className = "skeleton-line"
+      skeleton.appendChild(line)
+    }
+    this.el.chatArea.appendChild(skeleton)
+  }
+
+  hideLoadingSkeleton() {
+    const el = document.getElementById("loading-skeleton")
+    if (el) el.remove()
   }
 
   escapeHtml(value) {
