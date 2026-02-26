@@ -13,7 +13,9 @@ from src.verification.checks import (
     check_confidence,
     check_conflict,
     check_constraints,
+    check_dose_sanity,
     check_grounding,
+    check_medication_safety,
     verify_manifest,
 )
 from src.verification.icd10 import validate_cpt_format, validate_icd10_format
@@ -78,7 +80,7 @@ class TestConfidenceCheck:
     def test_no_hedging(self, sample_manifest_item):
         result = check_confidence(sample_manifest_item)
         assert result.passed is True
-        assert result.severity == "warning"
+        assert result.severity == "info"
 
     def test_hedging_in_description(self):
         item = ManifestItem(
@@ -549,3 +551,207 @@ class TestNormalizeForConflict:
             }
         )
         assert "meta" not in normalized
+
+
+# ------------------------------------------------------------------
+# Medication safety checks
+# ------------------------------------------------------------------
+
+class TestMedicationSafety:
+    @pytest.mark.asyncio
+    async def test_skips_non_medication_items(self, mock_openemr_client):
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.CREATE,
+            proposed_value={"code": "I10"},
+            source_reference="Encounter/1",
+            description="Not a medication",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_missing_drug_name_on_create(self, mock_openemr_client):
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"dose": "500mg"},
+            source_reference="Encounter/1",
+            description="Add medication",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        assert len(results) == 1
+        assert results[0].check_name == "medication_required_fields"
+        assert results[0].passed is False
+
+    @pytest.mark.asyncio
+    async def test_high_risk_drug_detected(self, mock_openemr_client):
+        mock_openemr_client.fhir_read.return_value = {"entry": []}
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Warfarin 5mg"},
+            source_reference="Encounter/1",
+            description="Start warfarin",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        high_risk = [r for r in results if r.check_name == "medication_high_risk"]
+        assert len(high_risk) == 1
+        assert high_risk[0].passed is False
+        assert high_risk[0].severity == "error"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_therapy_detected(self, mock_openemr_client):
+        mock_openemr_client.fhir_read.side_effect = [
+            {  # MedicationRequest query
+                "entry": [{"resource": {"drug": "Metformin 500mg", "title": "Metformin 500mg"}}]
+            },
+            {"entry": []},  # AllergyIntolerance query
+        ]
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Metformin"},
+            source_reference="Encounter/1",
+            description="Add metformin",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        dup = [r for r in results if r.check_name == "medication_duplicate"]
+        assert len(dup) == 1
+        assert dup[0].passed is False
+        assert dup[0].severity == "warning"
+
+    @pytest.mark.asyncio
+    async def test_allergy_conflict_detected(self, mock_openemr_client):
+        mock_openemr_client.fhir_read.side_effect = [
+            {"entry": []},  # MedicationRequest query
+            {  # AllergyIntolerance query
+                "entry": [{"resource": {"substance": "Penicillin", "display": "Penicillin allergy"}}]
+            },
+        ]
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Amoxicillin/Penicillin"},
+            source_reference="Encounter/1",
+            description="Add amoxicillin",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        allergy = [r for r in results if r.check_name == "medication_allergy_conflict"]
+        assert len(allergy) == 1
+        assert allergy[0].passed is False
+        assert allergy[0].severity == "error"
+
+    @pytest.mark.asyncio
+    async def test_safe_medication_passes(self, mock_openemr_client):
+        mock_openemr_client.fhir_read.return_value = {"entry": []}
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Acetaminophen 500mg"},
+            source_reference="Encounter/1",
+            description="Add acetaminophen",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        # No errors or warnings expected for a safe, non-duplicate, non-allergic drug
+        assert all(r.passed for r in results) or len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_fhir_checks_without_patient_id(self, mock_openemr_client):
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Warfarin 5mg"},
+            source_reference="Encounter/1",
+            description="Start warfarin",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "")
+        # Should still catch high-risk but skip FHIR-based checks
+        assert any(r.check_name == "medication_high_risk" for r in results)
+        mock_openemr_client.fhir_read.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fhir_error_handled_gracefully(self, mock_openemr_client):
+        mock_openemr_client.fhir_read.side_effect = Exception("connection failed")
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Lisinopril 10mg"},
+            source_reference="Encounter/1",
+            description="Add lisinopril",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        # Should get warnings for failed checks, not crash
+        warnings = [r for r in results if r.severity == "warning"]
+        assert len(warnings) >= 1
+
+
+# ------------------------------------------------------------------
+# Dose sanity checks
+# ------------------------------------------------------------------
+
+class TestDoseSanity:
+    def test_skips_non_medication(self):
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.CREATE,
+            proposed_value={"dose": "50000mg"},
+            source_reference="Encounter/1",
+            description="Not a med",
+        )
+        assert check_dose_sanity(item) == []
+
+    def test_skips_no_dose(self):
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Lisinopril"},
+            source_reference="Encounter/1",
+            description="No dose",
+        )
+        assert check_dose_sanity(item) == []
+
+    def test_normal_dose_passes(self):
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Metformin", "dose": "500mg BID"},
+            source_reference="Encounter/1",
+            description="Normal dose",
+        )
+        assert check_dose_sanity(item) == []
+
+    def test_high_dose_flagged(self):
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Something", "dose": "50000mg"},
+            source_reference="Encounter/1",
+            description="Very high dose",
+        )
+        results = check_dose_sanity(item)
+        assert len(results) == 1
+        assert results[0].check_name == "dose_sanity"
+        assert results[0].passed is False
+        assert "50000" in results[0].message
+
+    def test_boundary_dose_passes(self):
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Something", "dose": "10000mg"},
+            source_reference="Encounter/1",
+            description="Boundary dose",
+        )
+        assert check_dose_sanity(item) == []
+
+    def test_dose_with_spaces(self):
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Something", "dose": "15000 mg daily"},
+            source_reference="Encounter/1",
+            description="High dose with spaces",
+        )
+        results = check_dose_sanity(item)
+        assert len(results) == 1

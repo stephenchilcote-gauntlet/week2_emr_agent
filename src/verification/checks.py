@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from opentelemetry import trace
 from pydantic import BaseModel, Field
 
-from ..agent.models import ChangeManifest, ManifestItem
+from ..agent.models import ChangeManifest, ManifestAction, ManifestItem
 from ..observability.tracing import trace_verification
 from .icd10 import validate_cpt_format, validate_icd10_format
+
+logger = logging.getLogger(__name__)
+
+HIGH_RISK_DRUGS = {
+    "warfarin", "coumadin", "insulin", "methotrexate", "lithium", "digoxin",
+    "oxycodone", "fentanyl", "morphine", "hydromorphone", "heparin",
+    "enoxaparin", "apixaban", "rivaroxaban", "dabigatran",
+}
 
 HEDGING_PHRASES = [
     "possibly",
@@ -211,7 +220,7 @@ def check_confidence(item: ManifestItem) -> VerificationResult:
         check_name="confidence",
         passed=True,
         message="No hedging language detected",
-        severity="warning",
+        severity="info",
     )
 
 
@@ -281,6 +290,156 @@ async def check_conflict(
         )
 
 
+async def check_medication_safety(
+    item: ManifestItem, openemr_client: Any, patient_id: str
+) -> list[VerificationResult]:
+    """Run medication-specific safety checks on MedicationRequest items."""
+    if item.resource_type != "MedicationRequest":
+        return []
+
+    results: list[VerificationResult] = []
+    proposed = item.proposed_value
+
+    drug_name = proposed.get("drug") or proposed.get("title") or proposed.get("display")
+
+    # Required fields check for create actions
+    if item.action == ManifestAction.CREATE and not drug_name:
+        results.append(
+            VerificationResult(
+                item_id=item.id,
+                check_name="medication_required_fields",
+                passed=False,
+                message="MedicationRequest is missing a drug name (expected key: drug, title, or display)",
+            )
+        )
+        return results
+
+    if not drug_name:
+        return results
+
+    drug_name_lower = drug_name.lower()
+
+    # High-risk medication check (local, no FHIR needed)
+    for hr_drug in HIGH_RISK_DRUGS:
+        if hr_drug in drug_name_lower:
+            results.append(
+                VerificationResult(
+                    item_id=item.id,
+                    check_name="medication_high_risk",
+                    passed=False,
+                    message=f"'{drug_name}' is a high-risk medication and requires explicit clinician override",
+                    severity="error",
+                )
+            )
+            break
+
+    # FHIR-based checks require a patient_id
+    if not patient_id:
+        return results
+
+    try:
+        # Duplicate therapy check
+        med_bundle = await openemr_client.fhir_read(
+            "MedicationRequest", {"patient": patient_id}
+        )
+        for entry in (med_bundle or {}).get("entry", []):
+            resource = entry.get("resource", {})
+            existing_drug = (
+                resource.get("drug")
+                or resource.get("title")
+                or resource.get("display")
+                or ""
+            )
+            if existing_drug and drug_name_lower in existing_drug.lower():
+                results.append(
+                    VerificationResult(
+                        item_id=item.id,
+                        check_name="medication_duplicate",
+                        passed=False,
+                        message=f"Possible duplicate therapy: '{drug_name}' matches existing medication '{existing_drug}'",
+                        severity="warning",
+                    )
+                )
+                break
+    except Exception as exc:
+        logger.warning("Failed to check duplicate medications: %s", exc)
+        results.append(
+            VerificationResult(
+                item_id=item.id,
+                check_name="medication_duplicate",
+                passed=False,
+                message=f"Could not check for duplicate medications: {exc}",
+                severity="warning",
+            )
+        )
+
+    try:
+        # Allergy cross-check
+        allergy_bundle = await openemr_client.fhir_read(
+            "AllergyIntolerance", {"patient": patient_id}
+        )
+        for entry in (allergy_bundle or {}).get("entry", []):
+            resource = entry.get("resource", {})
+            substance = (
+                resource.get("substance")
+                or resource.get("display")
+                or resource.get("code", {}).get("text")
+                or ""
+            )
+            if substance and substance.lower() in drug_name_lower:
+                results.append(
+                    VerificationResult(
+                        item_id=item.id,
+                        check_name="medication_allergy_conflict",
+                        passed=False,
+                        message=f"Drug '{drug_name}' may conflict with documented allergy '{substance}'",
+                        severity="error",
+                    )
+                )
+                break
+    except Exception as exc:
+        logger.warning("Failed to check allergy cross-reference: %s", exc)
+        results.append(
+            VerificationResult(
+                item_id=item.id,
+                check_name="medication_allergy_conflict",
+                passed=False,
+                message=f"Could not check allergy cross-reference: {exc}",
+                severity="warning",
+            )
+        )
+
+    return results
+
+
+def check_dose_sanity(item: ManifestItem) -> list[VerificationResult]:
+    """Flag MedicationRequest items with unusually high doses."""
+    if item.resource_type != "MedicationRequest":
+        return []
+
+    dose_str = item.proposed_value.get("dose")
+    if not dose_str or not isinstance(dose_str, str):
+        return []
+
+    match = re.search(r"(\d+(?:\.\d+)?)\s*mg", dose_str, re.IGNORECASE)
+    if not match:
+        return []
+
+    dose_mg = float(match.group(1))
+    if dose_mg > 10000:
+        return [
+            VerificationResult(
+                item_id=item.id,
+                check_name="dose_sanity",
+                passed=False,
+                message=f"Unusually high dose detected: {dose_str} ({dose_mg} mg exceeds 10000 mg threshold)",
+                severity="warning",
+            )
+        ]
+
+    return []
+
+
 async def verify_manifest(
     manifest: ChangeManifest, openemr_client: Any
 ) -> VerificationReport:
@@ -292,6 +451,10 @@ async def verify_manifest(
         report.results.extend(check_constraints(item))
         report.results.append(check_confidence(item))
         report.results.append(await check_conflict(item, openemr_client))
+        report.results.extend(
+            await check_medication_safety(item, openemr_client, manifest.patient_id)
+        )
+        report.results.extend(check_dose_sanity(item))
 
     return report
 
