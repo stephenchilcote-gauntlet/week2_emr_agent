@@ -17,6 +17,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from ..agent.loop import AgentLoop
 from ..agent.models import AgentSession, PageContext
+from ..observability.audit import AuditEvent, AuditStore
 from ..observability.tracing import setup_tracing
 from ..tools.openemr_client import OpenEMRClient
 from ..tools.registry import ToolRegistry, register_default_tools
@@ -60,11 +61,13 @@ async def lifespan(app: FastAPI):
         tracer=tracer,
     )
     session_store = SessionStore(os.environ.get("SESSION_DB_PATH", "data/sessions.db"))
+    audit_store = AuditStore(os.environ.get("AUDIT_DB_PATH", "data/audit.db"))
 
     app.state.openemr_client = openemr_client
     app.state.tool_registry = tool_registry
     app.state.agent_loop = agent_loop
     app.state.session_store = session_store
+    app.state.audit_store = audit_store
 
     yield
 
@@ -190,6 +193,15 @@ async def chat(
     session = _get_or_create_session(req.session_id, user_id, session_store)
     otel_trace.get_current_span().set_attribute("session.id", session.id)
 
+    audit_store: AuditStore = app.state.audit_store
+    audit_store.record(AuditEvent(
+        session_id=session.id,
+        user_id=user_id,
+        event_type="chat_received",
+        summary=f"User message received ({len(req.message)} chars)",
+        details={"message_length": len(req.message)},
+    ))
+
     if req.page_context:
         session.page_context = PageContext(
             patient_id=req.page_context.patient_id,
@@ -223,6 +235,14 @@ async def chat(
         if msg.role == "assistant" and msg.content:
             last_assistant = msg.content
             break
+
+    audit_store.record(AuditEvent(
+        session_id=session.id,
+        user_id=user_id,
+        event_type="assistant_responded",
+        summary=f"Assistant responded ({len(last_assistant)} chars)",
+        details={"response_length": len(last_assistant)},
+    ))
 
     return ChatResponse(
         session_id=session.id,
@@ -295,6 +315,23 @@ async def approve_manifest(
         else:
             item.status = "pending"
 
+    approved_count = sum(1 for item in session.manifest.items if item.status == "approved")
+    rejected_count = sum(1 for item in session.manifest.items if item.status == "rejected")
+    audit_store: AuditStore = app.state.audit_store
+    audit_store.record(AuditEvent(
+        session_id=session.id,
+        user_id=user_id,
+        event_type="manifest_reviewed",
+        summary=f"Manifest reviewed: {approved_count} approved, {rejected_count} rejected",
+        details={
+            "manifest_id": session.manifest.id,
+            "approved_count": approved_count,
+            "rejected_count": rejected_count,
+            "approved_item_ids": req.approved_items,
+            "rejected_item_ids": req.rejected_items,
+        },
+    ))
+
     openemr_client: OpenEMRClient = app.state.openemr_client
 
     has_approved = any(item.status == "approved" for item in session.manifest.items)
@@ -332,6 +369,25 @@ async def execute_manifest(
         session = await agent_loop.execute_approved(session)
     session_store.save(session)
 
+    items = session.manifest.items if session.manifest else []
+    completed_count = sum(1 for i in items if i.status == "completed")
+    failed_count = sum(1 for i in items if i.status == "failed")
+    skipped_count = sum(1 for i in items if i.status in ("rejected", "pending"))
+    audit_store: AuditStore = app.state.audit_store
+    audit_store.record(AuditEvent(
+        session_id=session.id,
+        user_id=user_id,
+        event_type="manifest_executed",
+        summary=f"Manifest executed: {completed_count} completed, {failed_count} failed, {skipped_count} skipped",
+        details={
+            "manifest_id": session.manifest.id if session.manifest else None,
+            "completed_count": completed_count,
+            "failed_count": failed_count,
+            "skipped_count": skipped_count,
+            "item_ids": [i.id for i in items],
+        },
+    ))
+
     return {
         "session_id": session.id,
         "phase": session.phase,
@@ -342,9 +398,20 @@ async def execute_manifest(
                 "status": item.status,
                 "execution_result": item.execution_result,
             }
-            for item in (session.manifest.items if session.manifest else [])
+            for item in items
         ],
     }
+
+
+@app.get("/api/sessions/{session_id}/audit")
+async def get_session_audit(
+    session_id: str,
+    user_id: str = Depends(_require_user_id),
+) -> list[dict[str, Any]]:
+    _get_session(session_id, user_id, app.state.session_store)
+    audit_store: AuditStore = app.state.audit_store
+    events = audit_store.get_session_events(session_id)
+    return [event.model_dump() for event in events]
 
 
 @app.get("/api/manifest/{session_id}", response_model=ManifestResponse)
