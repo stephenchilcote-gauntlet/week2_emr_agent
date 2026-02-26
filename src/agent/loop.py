@@ -10,7 +10,7 @@ from opentelemetry import trace as otel_trace
 
 from ..observability.tracing import trace_llm_call, trace_tool_call
 from .dsl import parse_manifest_dsl
-from .labels import is_label
+from .labels import is_word_id, replace_uuids_with_words, resolve_identifier, resolve_reference
 from .models import (
     AgentMessage,
     AgentSession,
@@ -302,10 +302,9 @@ class AgentLoop:
                     resource_type=tool_call.arguments["resource_type"],
                     params=params,
                 )
-                if isinstance(result, dict) and "error" not in result:
-                    session.label_registry.register_bundle(result)
+                raw_json = json.dumps(result, default=str)
                 content = self._truncate_tool_content(
-                    json.dumps(result, default=str)
+                    replace_uuids_with_words(raw_json)
                 )
                 return ToolResult(
                     tool_call_id=tool_call.id,
@@ -675,8 +674,6 @@ class AgentLoop:
             if ctx.visible_data:
                 prompt += self._render_visible_data(ctx.visible_data)
 
-        prompt += f"\n\n{session.label_registry.format_context_table()}"
-
         if session.phase == "reviewing" and session.manifest:
             prompt += (
                 "\n\n## Active Manifest\n"
@@ -751,13 +748,11 @@ class AgentLoop:
     def _resolve_fhir_params(
         params: dict[str, str], session: AgentSession
     ) -> dict[str, str]:
-        """Resolve three-word labels in FHIR query params to UUIDs."""
+        """Resolve word-encoded IDs in FHIR query params to UUIDs."""
         resolved = dict(params)
         for key, value in resolved.items():
-            if isinstance(value, str) and is_label(value):
-                result = session.label_registry.resolve(value)
-                if result.get("ok"):
-                    resolved[key] = result["uuid"]
+            if isinstance(value, str) and is_word_id(value):
+                resolved[key] = resolve_identifier(value)
         return resolved
 
     def _extract_tool_calls(
@@ -880,23 +875,11 @@ class AgentLoop:
 
     @staticmethod
     def _resolve_manifest_identifier(identifier: str, session: AgentSession) -> str:
-        result = session.label_registry.resolve(identifier)
-        if result.get("ok"):
-            return result.get("uuid", identifier)
-        if is_label(identifier):
-            raise ValueError(result.get("error", f"Unable to resolve patient identifier: {identifier}"))
-        return identifier
+        return resolve_identifier(identifier)
 
     @staticmethod
     def _resolve_manifest_reference(reference: str, session: AgentSession) -> str:
-        result = session.label_registry.resolve_reference(reference)
-        if result.get("ok"):
-            return result.get("reference", reference)
-        if "/" in reference and is_label(reference.split("/", 1)[1]):
-            raise ValueError(result.get("error", f"Unable to resolve reference: {reference}"))
-        if is_label(reference):
-            raise ValueError(result.get("error", f"Unable to resolve reference: {reference}"))
-        return reference
+        return resolve_reference(reference)
 
     def _topological_sort(self, items: list[ManifestItem]) -> list[ManifestItem]:
         """Sort manifest items respecting depends_on ordering."""

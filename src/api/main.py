@@ -207,7 +207,6 @@ async def chat(
             fhir_id = patient_result["entry"][0].get("resource", {}).get("id")
             if fhir_id:
                 session.fhir_patient_id = fhir_id
-                session.label_registry.register(fhir_id, "Patient")
 
     agent_loop: AgentLoop = app.state.agent_loop
     try:

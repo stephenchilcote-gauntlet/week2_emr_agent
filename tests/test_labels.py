@@ -1,8 +1,4 @@
-"""Tests for UUID → 3-word label mapping.
-
-Ported from CollabBoard's src/ai/labels.test.js.
-Verifies identical behavior to the JS implementation.
-"""
+"""Tests for bijective UUID ↔ word-encoded identifier mapping."""
 
 from __future__ import annotations
 
@@ -13,220 +9,160 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from src.agent.labels import (
-    LabelRegistry,
-    is_label,
+    WORDLIST,
     is_uuid,
-    uuid_to_label,
+    is_word_id,
+    replace_uuids_with_words,
+    resolve_identifier,
+    resolve_reference,
+    uuid_to_words,
+    words_to_uuid,
 )
-
-# ---------------------------------------------------------------------------
-# Strategies
-# ---------------------------------------------------------------------------
 
 st_uuid = st.from_type(uuid.UUID).map(str)
 
 
-# ---------------------------------------------------------------------------
-# uuid_to_label properties (matching CollabBoard's PBT suite)
-# ---------------------------------------------------------------------------
-
-
-class TestUuidToLabelProperties:
+class TestUuidToWords:
     @given(st_uuid)
-    def test_always_produces_exactly_3_words(self, u: str) -> None:
-        parts = uuid_to_label(u).split(" ")
-        assert len(parts) == 3
+    def test_always_produces_10_words(self, u: str) -> None:
+        parts = uuid_to_words(u).split()
+        assert len(parts) == 10
 
     @given(st_uuid)
-    def test_every_word_is_lowercase_alphabetic(self, u: str) -> None:
-        for word in uuid_to_label(u).split(" "):
-            assert word.isalpha()
-            assert word == word.lower()
+    def test_every_word_is_in_wordlist(self, u: str) -> None:
+        for word in uuid_to_words(u).split():
+            assert word in WORDLIST
 
     @given(st_uuid)
     def test_is_deterministic(self, u: str) -> None:
-        assert uuid_to_label(u) == uuid_to_label(u)
+        assert uuid_to_words(u) == uuid_to_words(u)
 
     @given(st_uuid)
     def test_dashes_are_irrelevant(self, u: str) -> None:
         no_dashes = u.replace("-", "")
-        assert uuid_to_label(u) == uuid_to_label(no_dashes)
+        assert uuid_to_words(u) == uuid_to_words(no_dashes)
 
     @given(st_uuid)
-    def test_output_is_shorter_than_uuid(self, u: str) -> None:
-        assert len(uuid_to_label(u)) < len(u)
+    def test_round_trip(self, u: str) -> None:
+        words = uuid_to_words(u)
+        assert words_to_uuid(words) == u
+
+    @given(st_uuid)
+    def test_is_bijective_no_collisions(self, u: str) -> None:
+        words = uuid_to_words(u)
+        reconstructed = words_to_uuid(words)
+        assert reconstructed == u
 
 
-class TestUuidToLabelKnownValues:
-    def test_known_collision_pair_produces_same_label(self) -> None:
-        a = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
-        b = "ef4f8cd0-25b9-4029-9316-0f2f3b069b34"
-        assert uuid_to_label(a) == uuid_to_label(b)
-        assert uuid_to_label(a) == "tango golf potato"
+class TestWordsToUuid:
+    def test_rejects_wrong_word_count(self) -> None:
+        with pytest.raises(ValueError, match="Expected 10"):
+            words_to_uuid("one two three")
 
-    def test_identical_uuids_produce_identical_labels(self) -> None:
-        u = "deadbeef-dead-beef-dead-beefdeadbeef"
-        assert uuid_to_label(u) == uuid_to_label(u)
+    def test_rejects_unknown_words(self) -> None:
+        with pytest.raises(ValueError, match="not in wordlist"):
+            words_to_uuid("zzzznotaword " * 10)
 
 
-# ---------------------------------------------------------------------------
-# is_label / is_uuid
-# ---------------------------------------------------------------------------
+class TestIsWordId:
+    def test_valid_word_id(self) -> None:
+        u = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+        word_id = uuid_to_words(u)
+        assert is_word_id(word_id)
+
+    def test_uuid_is_not_word_id(self) -> None:
+        assert not is_word_id("bbb13f7a-966e-4c7c-aea5-4bac3ce98505")
+
+    def test_short_string_is_not_word_id(self) -> None:
+        assert not is_word_id("hello world")
+
+    def test_random_words_not_in_list(self) -> None:
+        assert not is_word_id("supercalifragilistic " * 10)
 
 
-class TestPredicates:
-    def test_is_label_true(self) -> None:
-        assert is_label("tango golf potato")
-        assert is_label("alpha bravo charlie")
-
-    def test_is_label_false(self) -> None:
-        assert not is_label("bbb13f7a-966e-4c7c-aea5-4bac3ce98505")
-        assert not is_label("hello")
-        assert not is_label("one two")
-        assert not is_label("one two three four")
-        assert not is_label("one 2 three")
-
-    def test_is_uuid_true(self) -> None:
+class TestIsUuid:
+    def test_dashed_uuid(self) -> None:
         assert is_uuid("bbb13f7a-966e-4c7c-aea5-4bac3ce98505")
+
+    def test_undashed_uuid(self) -> None:
         assert is_uuid("bbb13f7a966e4c7caea54bac3ce98505")
 
-    def test_is_uuid_false(self) -> None:
+    def test_word_id_is_not_uuid(self) -> None:
         assert not is_uuid("tango golf potato")
-        assert not is_uuid("not-a-uuid")
 
 
-# ---------------------------------------------------------------------------
-# LabelRegistry
-# ---------------------------------------------------------------------------
+class TestReplaceUuidsWithWords:
+    def test_replaces_uuid_in_json(self) -> None:
+        u = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+        text = f'{{"id": "{u}", "name": "test"}}'
+        result = replace_uuids_with_words(text)
+        assert u not in result
+        # The word-encoded version should be in the result
+        expected_words = uuid_to_words(u)
+        assert expected_words in result
+
+    def test_replaces_multiple_uuids(self) -> None:
+        u1 = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        u2 = "11111111-2222-3333-4444-555555555555"
+        text = f'"ref1": "{u1}", "ref2": "{u2}"'
+        result = replace_uuids_with_words(text)
+        assert u1 not in result
+        assert u2 not in result
+
+    def test_preserves_non_uuid_text(self) -> None:
+        text = "hello world, no uuids here"
+        assert replace_uuids_with_words(text) == text
 
 
-class TestLabelRegistry:
-    def test_register_and_resolve(self) -> None:
-        reg = LabelRegistry()
-        uid = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
-        label = reg.register(uid)
-        assert label == "tango golf potato"
+class TestResolveIdentifier:
+    def test_uuid_passthrough(self) -> None:
+        u = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+        assert resolve_identifier(u) == u
 
-        result = reg.resolve("tango golf potato")
-        assert result == {"ok": True, "uuid": uid}
+    def test_word_id_to_uuid(self) -> None:
+        u = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+        words = uuid_to_words(u)
+        assert resolve_identifier(words) == u
 
-    def test_resolve_raw_uuid(self) -> None:
-        reg = LabelRegistry()
-        uid = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
-        reg.register(uid)
+    def test_unknown_identifier_passthrough(self) -> None:
+        assert resolve_identifier("patient-1") == "patient-1"
 
-        result = reg.resolve(uid)
-        assert result["ok"] is True
-        assert result["uuid"] == uid
 
-    def test_collision_returns_error_with_matches(self) -> None:
-        reg = LabelRegistry()
-        a = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
-        b = "ef4f8cd0-25b9-4029-9316-0f2f3b069b34"
-        reg.register(a)
-        reg.register(b)
+class TestResolveReference:
+    def test_fhir_reference_with_uuid(self) -> None:
+        u = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+        assert resolve_reference(f"Condition/{u}") == f"Condition/{u}"
 
-        result = reg.resolve("tango golf potato")
-        assert result["ok"] is False
-        assert "Multiple" in result["error"]
-        assert set(result["matches"]) == {a, b}
+    def test_fhir_reference_with_word_id(self) -> None:
+        u = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+        words = uuid_to_words(u)
+        result = resolve_reference(f"Encounter/{words}")
+        assert result == f"Encounter/{u}"
 
-    def test_collision_uuid_fallback_still_works(self) -> None:
-        reg = LabelRegistry()
-        a = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
-        b = "ef4f8cd0-25b9-4029-9316-0f2f3b069b34"
-        reg.register(a)
-        reg.register(b)
+    def test_bare_uuid(self) -> None:
+        u = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+        assert resolve_reference(u) == u
 
-        result_a = reg.resolve(a)
-        assert result_a == {"ok": True, "uuid": a}
-        result_b = reg.resolve(b)
-        assert result_b == {"ok": True, "uuid": b}
+    def test_bare_word_id(self) -> None:
+        u = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+        words = uuid_to_words(u)
+        assert resolve_reference(words) == u
 
-    def test_resolve_reference_with_label(self) -> None:
-        reg = LabelRegistry()
-        uid = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
-        reg.register(uid)
 
-        result = reg.resolve_reference("Encounter/tango golf potato")
-        assert result == {"ok": True, "reference": f"Encounter/{uid}"}
+class TestBijectiveProperties:
+    """Verify the encoding is truly bijective — distinct UUIDs always
+    produce distinct word-IDs."""
 
-    def test_resolve_reference_with_uuid(self) -> None:
-        reg = LabelRegistry()
-        uid = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
-        reg.register(uid)
-
-        result = reg.resolve_reference(f"Condition/{uid}")
-        assert result == {"ok": True, "reference": f"Condition/{uid}"}
-
-    def test_resolve_not_found(self) -> None:
-        reg = LabelRegistry()
-        result = reg.resolve("nonexistent label here")
-        assert result["ok"] is False
-        assert "not found" in result["error"]
-
-    def test_register_bundle(self) -> None:
-        reg = LabelRegistry()
-        bundle = {
-            "resourceType": "Bundle",
-            "total": 2,
-            "entry": [
-                {
-                    "resource": {
-                        "resourceType": "Condition",
-                        "id": "bbb13f7a-966e-4c7c-aea5-4bac3ce98505",
-                    }
-                },
-                {
-                    "resource": {
-                        "resourceType": "Encounter",
-                        "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                    }
-                },
-            ],
-        }
-        reg.register_bundle(bundle)
-        assert len(reg) == 2
-        assert reg.get_label("bbb13f7a-966e-4c7c-aea5-4bac3ce98505") == "tango golf potato"
-
-    def test_register_idempotent(self) -> None:
-        reg = LabelRegistry()
-        uid = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
-        label1 = reg.register(uid)
-        label2 = reg.register(uid)
-        assert label1 == label2
-        assert len(reg) == 1
-
-    def test_format_context_table(self) -> None:
-        reg = LabelRegistry()
-        reg.register("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-        table = reg.format_context_table()
-        assert "Resource Labels" in table
-        assert "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" in table
-
-    def test_format_context_table_collision(self) -> None:
-        reg = LabelRegistry()
-        a = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
-        b = "ef4f8cd0-25b9-4029-9316-0f2f3b069b34"
-        reg.register(a)
-        reg.register(b)
-        table = reg.format_context_table()
-        assert "COLLISION" in table
-        assert a in table
-        assert b in table
-
-    @given(st.lists(st_uuid, min_size=1, max_size=20))
+    @given(st.lists(st_uuid, min_size=2, max_size=50, unique=True))
     @settings(max_examples=50)
-    def test_every_registered_uuid_has_valid_label(self, uuids: list[str]) -> None:
-        reg = LabelRegistry()
-        for u in uuids:
-            label = reg.register(u)
-            assert len(label.split(" ")) == 3
+    def test_no_collisions_in_batch(self, uuids: list[str]) -> None:
+        word_ids = [uuid_to_words(u) for u in uuids]
+        assert len(set(word_ids)) == len(uuids)
 
-    @given(st_uuid)
-    def test_round_trip_no_collision(self, u: str) -> None:
-        reg = LabelRegistry()
-        label = reg.register(u)
-        result = reg.resolve(label)
-        assert result["ok"] is True
-        assert result["uuid"] == u
+    def test_known_collision_pair_no_longer_collides(self) -> None:
+        """The old 3-word system had collisions. The new system must not."""
+        a = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+        b = "ef4f8cd0-25b9-4029-9316-0f2f3b069b34"
+        assert uuid_to_words(a) != uuid_to_words(b)
+        assert words_to_uuid(uuid_to_words(a)) == a
+        assert words_to_uuid(uuid_to_words(b)) == b

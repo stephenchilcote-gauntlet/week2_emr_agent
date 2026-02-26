@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, call
 
 from fastapi.testclient import TestClient
 
-from src.agent.labels import uuid_to_label
+from src.agent.labels import uuid_to_words
 from src.agent.models import AgentMessage, AgentSession, ChangeManifest, ManifestAction, ManifestItem, ToolCall
 from src.api.main import app
 
@@ -220,10 +220,8 @@ def test_chat_resolves_pid_to_fhir_uuid_using_identifier_param() -> None:
     fhir_read_mock.assert_awaited_once_with("Patient", {"identifier": PATIENT_PID})
 
 
-def test_chat_sets_fhir_patient_id_and_registers_label() -> None:
-    """After resolving a pid, the session must have fhir_patient_id set
-    and the UUID must be registered in the label_registry so the LLM
-    can use three-word labels for the patient."""
+def test_chat_sets_fhir_patient_id() -> None:
+    """After resolving a pid, the session must have fhir_patient_id set."""
     with TestClient(app) as client:
         client.app.state.agent_loop = _DummyAgentLoop()
         client.app.state.openemr_client = SimpleNamespace(
@@ -248,8 +246,6 @@ def test_chat_sets_fhir_patient_id_and_registers_label() -> None:
 
     assert session is not None
     assert session.fhir_patient_id == PATIENT_FHIR_UUID
-    expected_label = uuid_to_label(PATIENT_FHIR_UUID)
-    assert session.label_registry.get_label(PATIENT_FHIR_UUID) == expected_label
 
 
 def test_chat_skips_patient_lookup_when_fhir_id_already_set() -> None:

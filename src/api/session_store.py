@@ -43,7 +43,7 @@ class SessionStore:
 
     def save(self, session: AgentSession) -> None:
         payload = json.dumps(
-            session.model_dump(mode="json", exclude={"label_registry"}),
+            session.model_dump(mode="json"),
             default=str,
         )
         with self._connect() as conn:

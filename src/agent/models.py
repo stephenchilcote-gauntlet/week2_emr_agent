@@ -7,9 +7,6 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .labels import LabelRegistry
-
-
 class ToolCall(BaseModel):
     name: str
     arguments: dict[str, Any]
@@ -86,4 +83,4 @@ class AgentSession(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     openemr_user_id: str | None = None
     fhir_patient_id: str | None = None
-    label_registry: LabelRegistry = Field(default_factory=LabelRegistry, exclude=True)
+

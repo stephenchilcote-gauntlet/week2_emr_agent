@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.agent.labels import uuid_to_label
+from src.agent.labels import uuid_to_words
 from src.agent import loop as loop_module
 from src.agent.loop import AgentLoop
 from src.agent.models import AgentSession, PageContext, ToolCall
@@ -152,7 +152,8 @@ async def test_submit_manifest_merges_items_and_replaces_duplicate_ids() -> None
 
 
 @pytest.mark.asyncio
-async def test_submit_manifest_returns_error_for_unresolvable_label_reference() -> None:
+async def test_submit_manifest_passes_through_unknown_references() -> None:
+    """Non-UUID, non-word-ID references should pass through as-is."""
     openemr_client = AsyncMock()
     loop = _make_loop(openemr_client, [])
     session = AgentSession()
@@ -169,7 +170,7 @@ async def test_submit_manifest_returns_error_for_unresolvable_label_reference() 
                         "resource_type": "Condition",
                         "action": "create",
                         "proposed_value": {"code": "I10"},
-                        "source_reference": "Encounter/tango golf potato",
+                        "source_reference": "Encounter/some-ref",
                         "description": "test",
                     }
                 ],
@@ -178,12 +179,13 @@ async def test_submit_manifest_returns_error_for_unresolvable_label_reference() 
         session,
     )
 
-    assert result.is_error is True
-    assert "not found" in result.content.lower()
+    assert result.is_error is False
+    assert session.manifest is not None
+    assert session.manifest.items[0].source_reference == "Encounter/some-ref"
 
 
 @pytest.mark.asyncio
-async def test_fhir_read_registers_bundle_ids_in_label_registry() -> None:
+async def test_fhir_read_replaces_uuids_with_words_in_response() -> None:
     openemr_client = AsyncMock()
     uuid_value = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
     openemr_client.fhir_read.return_value = {
@@ -203,10 +205,12 @@ async def test_fhir_read_registers_bundle_ids_in_label_registry() -> None:
     )
 
     assert result.is_error is False
-    assert session.label_registry.get_label(uuid_value) == uuid_to_label(uuid_value)
+    assert uuid_value not in result.content
+    expected_words = uuid_to_words(uuid_value)
+    assert expected_words in result.content
 
 
-def test_system_prompt_sanitizes_context_fields_and_includes_label_table() -> None:
+def test_system_prompt_sanitizes_context_fields() -> None:
     openemr_client = AsyncMock()
     loop = _make_loop(openemr_client, [])
     session = AgentSession(
@@ -216,7 +220,6 @@ def test_system_prompt_sanitizes_context_fields_and_includes_label_table() -> No
             page_type="encounter-" + ("x" * 200),
         )
     )
-    session.label_registry.register("bbb13f7a-966e-4c7c-aea5-4bac3ce98505")
 
     prompt = loop._get_system_prompt(session)
 
@@ -224,7 +227,6 @@ def test_system_prompt_sanitizes_context_fields_and_includes_label_table() -> No
     assert "Patient ID: patient-123 INJECT" in prompt
     assert "Encounter ID: enc-456  BLOCK" in prompt
     assert "\nINJECT" not in prompt
-    assert "Resource Labels (use these instead of UUIDs)" in prompt
 
 
 def test_sanitize_context_field_handles_none_and_tabs() -> None:
@@ -269,12 +271,12 @@ def test_build_manifest_uses_agent_supplied_item_id_for_legacy_json() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fhir_read_resolves_label_params_to_uuids_before_query() -> None:
-    """When the LLM uses a three-word label as a FHIR query param
-    (e.g. patient='tango golf potato'), the loop must resolve it to
-    the real UUID before calling openemr_client.fhir_read."""
+async def test_fhir_read_resolves_word_id_params_to_uuids_before_query() -> None:
+    """When the LLM uses a word-encoded ID as a FHIR query param,
+    the loop must resolve it to the real UUID before calling
+    openemr_client.fhir_read."""
     patient_uuid = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
-    patient_label = uuid_to_label(patient_uuid)
+    patient_words = uuid_to_words(patient_uuid)
 
     openemr_client = AsyncMock()
     openemr_client.fhir_read = AsyncMock(
@@ -282,7 +284,6 @@ async def test_fhir_read_resolves_label_params_to_uuids_before_query() -> None:
     )
     loop = _make_loop(openemr_client, [])
     session = AgentSession()
-    session.label_registry.register(patient_uuid, "Patient")
 
     await loop._execute_tool(
         ToolCall(
@@ -290,7 +291,7 @@ async def test_fhir_read_resolves_label_params_to_uuids_before_query() -> None:
             name="fhir_read",
             arguments={
                 "resource_type": "Condition",
-                "params": {"patient": patient_label},
+                "params": {"patient": patient_words},
             },
         ),
         session,
