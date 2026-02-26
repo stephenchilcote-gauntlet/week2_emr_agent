@@ -135,6 +135,15 @@ class SidebarApp {
       if (event.data && event.data.type === "overlay:result") {
         this.handleOverlayResult(event.data)
       }
+      if (event.data && event.data.type === "overlay:accept") {
+        this.handleInlineAction(event.data.itemId, "approved")
+      }
+      if (event.data && event.data.type === "overlay:reject") {
+        this.handleInlineAction(event.data.itemId, "rejected")
+      }
+      if (event.data && event.data.type === "overlay:navigate") {
+        this.tourNavigate(event.data.delta)
+      }
     })
 
     this.el.chatArea.addEventListener("scroll", () => {
@@ -543,7 +552,7 @@ class SidebarApp {
     this.el.tourNext.disabled = idx === total - 1
 
     this.renderTourCard(manifest.items[idx])
-    this.requestOverlay(manifest.items[idx])
+    this.requestAllOverlays(manifest.items)
 
     let approved = 0
     let rejected = 0
@@ -733,10 +742,21 @@ class SidebarApp {
     this.postOverlayMessage({ type: "overlay:apply", item })
   }
 
+  requestAllOverlays(items) {
+    this.postOverlayMessage({ type: "overlay:applyAll", items })
+  }
+
   handleOverlayResult(data) {
     if (!data.applied && data.reason === "sidebar-only") {
       // expected for non-dashboard resources, no action needed
     }
+  }
+
+  handleInlineAction(itemId, status) {
+    if (!this.state.pendingManifest) return
+    const item = this.state.pendingManifest.items.find((i) => i.id === itemId)
+    if (!item) return
+    this.updateReviewItem(itemId, status, JSON.stringify(item.proposed_value || {}))
   }
 
   makeReviewButton(label, className, onClick) {
