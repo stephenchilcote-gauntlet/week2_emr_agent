@@ -87,6 +87,115 @@
     return badge
   }
 
+  function buildDisplayTitle(item) {
+    if (!item.proposed_value) return item.description || ""
+    var pv = item.proposed_value
+    var title = pv.code_text || pv.title || pv.display || ""
+    if (pv.code && title) {
+      title += " (" + pv.code + ")"
+    }
+    if (title) return title
+
+    // Medication-specific: compose from drug + dose + route + freq
+    if (pv.drug || pv.dose || pv.freq || pv.route) {
+      var parts = []
+      if (pv.drug) parts.push(pv.drug)
+      if (pv.dose) parts.push(pv.dose)
+      if (pv.route) parts.push(pv.route)
+      if (pv.freq) parts.push(pv.freq)
+      if (parts.length > 0) return parts.join(" ")
+    }
+
+    return item.description || ""
+  }
+
+  function buildProposedRowText(currentText, item) {
+    var pv = item.proposed_value
+    if (!pv) return null
+
+    var fullTitle = pv.code_text || pv.title || pv.display
+    if (fullTitle) {
+      if (pv.code) fullTitle += " (" + pv.code + ")"
+      return fullTitle
+    }
+
+    // Medication-specific: drug name from proposed_value or from existing row
+    if (pv.dose || pv.freq || pv.route || pv.drug) {
+      var drug = pv.drug || currentText.split(/\s+/)[0] || ""
+      var parts = [drug]
+      if (pv.dose) parts.push(pv.dose)
+      if (pv.route) parts.push(pv.route)
+      if (pv.freq) parts.push(pv.freq)
+      return parts.join(" ")
+    }
+
+    return null
+  }
+
+  function wordDiff(oldText, newText) {
+    var oldWords = oldText.split(/\s+/).filter(Boolean)
+    var newWords = newText.split(/\s+/).filter(Boolean)
+
+    // Common prefix
+    var i = 0
+    while (i < oldWords.length && i < newWords.length && oldWords[i] === newWords[i]) i++
+
+    // Common suffix
+    var j = 0
+    while (
+      j < oldWords.length - i &&
+      j < newWords.length - i &&
+      oldWords[oldWords.length - 1 - j] === newWords[newWords.length - 1 - j]
+    ) j++
+
+    return {
+      same: oldWords.slice(0, i).join(" "),
+      removed: oldWords.slice(i, oldWords.length - j).join(" "),
+      added: newWords.slice(i, newWords.length - j).join(" "),
+      suffix: j > 0 ? oldWords.slice(oldWords.length - j).join(" ") : "",
+    }
+  }
+
+  function renderWordDiff(frameDoc, oldText, newText) {
+    var diff = wordDiff(oldText, newText)
+    var container = frameDoc.createElement("div")
+    container.className = "agent-overlay-diff"
+    container.style.cssText = "margin-top:2px;font-size:12px;padding-left:8px;"
+
+    var arrow = frameDoc.createElement("span")
+    arrow.textContent = "→ "
+    arrow.style.color = "#6b7280"
+    container.appendChild(arrow)
+
+    if (diff.same) {
+      var sameSpan = frameDoc.createElement("span")
+      sameSpan.textContent = diff.same + " "
+      container.appendChild(sameSpan)
+    }
+
+    if (diff.removed) {
+      var delSpan = frameDoc.createElement("span")
+      delSpan.style.cssText = "text-decoration:line-through;opacity:0.6;"
+      delSpan.textContent = diff.removed
+      container.appendChild(delSpan)
+      container.appendChild(frameDoc.createTextNode(" "))
+    }
+
+    if (diff.added) {
+      var addSpan = frameDoc.createElement("span")
+      addSpan.style.cssText =
+        "font-weight:600;background:#D1FAE5;padding:0 3px;border-radius:2px;"
+      addSpan.textContent = diff.added
+      container.appendChild(addSpan)
+    }
+
+    if (diff.suffix) {
+      container.appendChild(frameDoc.createTextNode(" " + diff.suffix))
+    }
+
+    return container
+  }
+
   function applyCreateOverlay(item, mapping) {
     var frameDoc = getFrameDocument(mapping.tab)
     if (!frameDoc) return { applied: false, reason: "Frame not available" }
@@ -99,26 +208,30 @@
       listGroup = container
     }
 
+    // Build a ghost row that matches the real EMR row structure
     var ghost = frameDoc.createElement("div")
-    ghost.className = "list-group-item agent-overlay-ghost"
+    ghost.className = "list-group-item p-1 agent-overlay-ghost"
     ghost.style.cssText =
-      "background:#FEF3C7;border-left:3px solid #d97706;padding:6px 8px;" +
-      "display:flex;align-items:center;gap:6px;"
+      "background:#ECFDF5;border-left:3px solid #10b981;opacity:0.85;"
 
-    var badge = createBadge("Suggested", "#2563eb")
-    ghost.appendChild(badge)
+    var summary = frameDoc.createElement("div")
+    summary.className = "summary m-0 p-0 d-flex w-100 align-content-center"
 
-    var text = frameDoc.createElement("span")
-    var displayText = item.description || ""
-    if (item.proposed_value) {
-      var pv = item.proposed_value
-      displayText = pv.code_text || pv.title || pv.display || item.description || ""
-      if (pv.code) {
-        displayText += " (" + pv.code + ")"
-      }
-    }
-    text.textContent = displayText
-    ghost.appendChild(text)
+    var fill = frameDoc.createElement("div")
+    fill.className = "flex-fill pl-2"
+
+    var titleEl = frameDoc.createElement("span")
+    titleEl.className = "font-weight-bold"
+    titleEl.textContent = buildDisplayTitle(item)
+    fill.appendChild(titleEl)
+
+    var statusSpan = frameDoc.createElement("span")
+    statusSpan.textContent = " (Pending)"
+    statusSpan.style.cssText = "font-style:italic;color:#6b7280;"
+    fill.appendChild(statusSpan)
+
+    summary.appendChild(fill)
+    ghost.appendChild(summary)
 
     listGroup.insertBefore(ghost, listGroup.firstChild)
     injectedElements.push({ element: ghost, frameDoc: frameDoc })
@@ -136,36 +249,18 @@
     if (!row) return { applied: false, reason: "Row not found for UUID " + uuid }
 
     row.dataset.originalBg = row.style.background || ""
-    row.style.background = "#FEF3C7"
+    row.dataset.originalBorderLeft = row.style.borderLeft || ""
+    row.style.background = "#ECFDF5"
+    row.style.borderLeft = "3px solid #10b981"
 
-    var badge = createBadge("Suggested", "#2563eb")
-    row.appendChild(badge)
-    injectedElements.push({ element: badge, frameDoc: frameDoc })
+    // Read current text straight from the DOM row
+    var currentText = row.textContent.trim()
+    var proposedText = buildProposedRowText(currentText, item)
 
-    if (item.current_value && item.proposed_value) {
-      var diffSpan = frameDoc.createElement("span")
-      diffSpan.className = "agent-overlay-diff"
-      diffSpan.style.cssText = "margin-left:6px;font-size:12px;"
-
-      var oldText = item.current_value.title || item.current_value.display || ""
-      var newText = item.proposed_value.title || item.proposed_value.display || ""
-      if (oldText && newText && oldText !== newText) {
-        var del = frameDoc.createElement("span")
-        del.style.cssText = "text-decoration:line-through;opacity:0.6;"
-        del.textContent = oldText
-        diffSpan.appendChild(del)
-
-        var arrow = frameDoc.createTextNode(" → ")
-        diffSpan.appendChild(arrow)
-
-        var ins = frameDoc.createElement("span")
-        ins.style.fontWeight = "600"
-        ins.textContent = newText
-        diffSpan.appendChild(ins)
-
-        row.appendChild(diffSpan)
-        injectedElements.push({ element: diffSpan, frameDoc: frameDoc })
-      }
+    if (proposedText && proposedText !== currentText) {
+      var diffEl = renderWordDiff(frameDoc, currentText, proposedText)
+      row.appendChild(diffEl)
+      injectedElements.push({ element: diffEl, frameDoc: frameDoc })
     }
 
     injectedElements.push({ element: row, frameDoc: frameDoc, restoreBg: true })
@@ -211,7 +306,9 @@
       var entry = injectedElements[i]
       if (entry.restoreBg) {
         entry.element.style.background = entry.element.dataset.originalBg || ""
+        entry.element.style.borderLeft = entry.element.dataset.originalBorderLeft || ""
         delete entry.element.dataset.originalBg
+        delete entry.element.dataset.originalBorderLeft
       } else if (entry.restoreDelete) {
         entry.element.style.background = entry.element.dataset.originalBg || ""
         entry.element.style.textDecoration = entry.element.dataset.originalTextDecoration || ""
@@ -228,6 +325,17 @@
     injectedElements = []
   }
 
+  function navigateToTab(tabName) {
+    try {
+      var topWin = window.top || window
+      if (typeof topWin.activateTabByName === "function") {
+        topWin.activateTabByName(tabName, true)
+      }
+    } catch (_e) {
+      // cross-origin or function not available
+    }
+  }
+
   function applyOverlay(item) {
     var mapping = RESOURCE_PAGE_MAP[item.resource_type]
     if (!mapping || !mapping.supportsRowTarget) {
@@ -235,6 +343,7 @@
     }
 
     clearAllOverlays()
+    navigateToTab(mapping.tab)
 
     if (item.action === "create") {
       return applyCreateOverlay(item, mapping)
@@ -273,6 +382,7 @@
   window.__overlayEngine = {
     applyOverlay: applyOverlay,
     clearAllOverlays: clearAllOverlays,
+    navigateToTab: navigateToTab,
     RESOURCE_PAGE_MAP: RESOURCE_PAGE_MAP,
   }
 })()

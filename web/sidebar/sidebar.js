@@ -126,6 +126,12 @@ class SidebarApp {
     this.el.tourNext.addEventListener("click", () => this.tourNavigate(1))
 
     window.addEventListener("message", (event) => {
+      if (event.data && event.data.type === "clinical-assistant-context") {
+        this.state.patientID = event.data.pid || null
+        this.state.encounterID = event.data.encounter_id || null
+        this.state.patientName = event.data.pname || null
+        this.updateContextDisplay()
+      }
       if (event.data && event.data.type === "overlay:result") {
         this.handleOverlayResult(event.data)
       }
@@ -147,25 +153,35 @@ class SidebarApp {
   }
 
   refreshContext() {
+    // Source 1: OPENEMR_SESSION_CONTEXT (set by sidebar_frame.php)
+    const ctx = window.OPENEMR_SESSION_CONTEXT
+    if (ctx && ctx.pid) {
+      this.state.patientID = ctx.pid
+      this.state.encounterID = ctx.encounter || null
+      this.state.patientName = ctx.patient_name || null
+      this.state.activeTab = null
+      this.updateContextDisplay()
+      return
+    }
+
+    // Source 2: openemrAgentContext (standalone dev mode)
     const globals = window.top || window
     const openemrGlobals = globals.openemrAgentContext || {}
-    const patientID = openemrGlobals.pid || null
-    const encounterID = openemrGlobals.encounter || null
-    const patientName = openemrGlobals.patient_name || null
-    const activeTab = openemrGlobals.active_tab_title || openemrGlobals.active_tab || null
+    this.state.patientID = openemrGlobals.pid || null
+    this.state.encounterID = openemrGlobals.encounter || null
+    this.state.patientName = openemrGlobals.patient_name || null
+    this.state.activeTab = openemrGlobals.active_tab_title || openemrGlobals.active_tab || null
+    this.updateContextDisplay()
+  }
 
-    this.state.patientID = patientID
-    this.state.encounterID = encounterID
-    this.state.patientName = patientName
-    this.state.activeTab = activeTab
-
-    if (patientID) {
-      const encounterText = encounterID ? ` · Enc: ${encounterID}` : ""
-      const tabText = activeTab ? ` · ${activeTab}` : ""
-      const nameText = patientName || patientID
+  updateContextDisplay() {
+    if (this.state.patientID) {
+      const encounterText = this.state.encounterID ? ` · Enc: ${this.state.encounterID}` : ""
+      const tabText = this.state.activeTab ? ` · ${this.state.activeTab}` : ""
+      const nameText = this.state.patientName || this.state.patientID
       this.el.contextLine.textContent = `${nameText}${encounterText}${tabText}`
     } else {
-      const tabText = activeTab ? `Tab: ${activeTab}` : "No patient selected"
+      const tabText = this.state.activeTab ? `Tab: ${this.state.activeTab}` : "No patient selected"
       this.el.contextLine.textContent = tabText
     }
   }
@@ -187,16 +203,24 @@ class SidebarApp {
   }
 
   async api(path, options = {}) {
+    const proxyBase = window.OPENEMR_AGENT_PROXY
+    let url
+    if (proxyBase) {
+      const separator = proxyBase.includes("?") ? "&" : "?"
+      url = `${proxyBase}${separator}path=${encodeURIComponent(path)}`
+    } else {
+      url = path
+    }
     const headers = {
       "Content-Type": "application/json",
-      "openemr_user_id": DEFAULT_USER,
+      ...(proxyBase ? {} : { "openemr_user_id": DEFAULT_USER }),
       ...(options.headers || {}),
     }
     const fetchOptions = { ...options, headers }
     if (options.signal) {
       fetchOptions.signal = options.signal
     }
-    const response = await fetch(path, fetchOptions)
+    const response = await fetch(url, fetchOptions)
     if (!response.ok) {
       const text = await response.text()
       throw new Error(text || `HTTP ${response.status}`)
