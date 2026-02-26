@@ -333,6 +333,41 @@ async def test_fhir_read_passes_uuid_params_unchanged() -> None:
     )
 
 
+def test_build_manifest_resolves_word_ids_in_dsl_refs() -> None:
+    """Word-encoded IDs in DSL ref attrs must be resolved to hex UUIDs.
+
+    This is the root cause of both overlay and execution failures:
+    target_resource_id and proposed_value.ref were stored as word-IDs
+    instead of hex UUIDs, so the REST lookup and DOM data-uuid match
+    both failed silently.
+    """
+    med_uuid = "a12bac8f-a8bb-47a6-aaf0-b363093e48b3"
+    med_words = uuid_to_words(med_uuid)
+    src_uuid = "a12bac8f-a8b0-44b1-9c2f-82a883e2e108"
+    src_words = uuid_to_words(src_uuid)
+
+    openemr_client = AsyncMock()
+    loop = _make_loop(openemr_client, [])
+    session = AgentSession()
+
+    dsl = (
+        f'<edit ref="MedicationRequest/{med_words}" '
+        f'dose="5mg" freq="once daily" route="oral" '
+        f'src="Condition/{src_words}" conf="medium" id="med-1">'
+        f"Add dose</edit>"
+    )
+
+    manifest = loop._build_manifest(
+        {"patient_id": "patient-1", "items": dsl},
+        session,
+    )
+
+    item = manifest.items[0]
+    assert item.target_resource_id == med_uuid
+    assert item.proposed_value["ref"] == f"MedicationRequest/{med_uuid}"
+    assert item.source_reference == f"Condition/{src_uuid}"
+
+
 @pytest.mark.asyncio
 async def test_fhir_read_no_params_does_not_crash() -> None:
     """fhir_read with no params should work without label resolution."""

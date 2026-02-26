@@ -12,6 +12,8 @@ Run:
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
 
 import pytest
@@ -25,18 +27,35 @@ AGENT_USER_ID = "1"
 PATIENT_PID = "4"
 PATIENT_PID_KOWALSKI = "5"
 
+# Remote execution via SSH for prod deployments.
+# Set E2E_SSH_HOST to run DB queries on a remote VPS (e.g. "root@77.42.17.207").
+E2E_SSH_HOST = os.environ.get("E2E_SSH_HOST", "")
+E2E_MYSQL_CONTAINER = os.environ.get("E2E_MYSQL_CONTAINER", "week2_emr_agent-mysql-1")
+E2E_MYSQL_PASS = os.environ.get("E2E_MYSQL_PASS", "openemr")
+
 
 def _db_query(sql: str) -> str:
-    """Run a SQL query against the OpenEMR database via docker exec."""
+    """Run a SQL query against the OpenEMR database via docker exec.
+
+    When E2E_SSH_HOST is set, runs the docker exec command on the remote
+    host via SSH (for prod deployments).
+    """
+    docker_cmd = [
+        "docker", "exec", E2E_MYSQL_CONTAINER,
+        "mysql", f"-uopenemr", f"-p{E2E_MYSQL_PASS}", "openemr",
+        "-e", sql,
+    ]
+    if E2E_SSH_HOST:
+        remote_cmd = " ".join(shlex.quote(c) for c in docker_cmd)
+        cmd = ["ssh", "-o", "StrictHostKeyChecking=no", E2E_SSH_HOST, remote_cmd]
+    else:
+        cmd = docker_cmd
+
     result = subprocess.run(
-        [
-            "docker", "exec", "week2_emr_agent-mysql-1",
-            "mysql", "-uopenemr", "-popenemr", "openemr",
-            "-e", sql,
-        ],
+        cmd,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=30,
     )
     if result.returncode != 0:
         raise RuntimeError(f"MySQL query failed: {result.stderr}")
@@ -88,7 +107,12 @@ def _approve_and_execute(api, session_id: str, item_ids: list[str]) -> dict:
 @pytest.fixture
 def openemr_page(page: Page) -> Page:
     page.set_default_timeout(E2E_TIMEOUT_MS)
-    openemr_login(page)
+    if E2E_SSH_HOST:
+        # Prod mode: skip OpenEMR login; navigate to agent UI for request context.
+        page.goto(f"{AGENT_BASE_URL}/ui")
+        page.wait_for_load_state("networkidle")
+    else:
+        openemr_login(page)
     return page
 
 

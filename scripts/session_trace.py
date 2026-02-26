@@ -1,11 +1,12 @@
-"""Retrieve full session trace by UUID.
+"""Retrieve full session trace by UUID from prod VPS.
 
 One-step audit: pass a session UUID from the sidebar UI, get the complete
 conversation record with tool calls, manifest, and Jaeger trace timeline.
+Defaults to fetching from production VPS (https://emragent.404.mn).
 
 Usage:
     uv run python scripts/session_trace.py <session-uuid>
-    uv run python scripts/session_trace.py <session-uuid> --db-path data/sessions.db
+    uv run python scripts/session_trace.py <session-uuid> --api-url http://localhost:8000  # local
     uv run python scripts/session_trace.py <session-uuid> --jaeger-url http://localhost:16686
 """
 
@@ -40,8 +41,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--api-url",
-        default=None,
-        help="Remote agent API base URL (e.g. http://localhost:8000). "
+        default="https://emragent.404.mn",
+        help="Remote agent API base URL (default: https://emragent.404.mn). "
              "When set, fetches session data from the API instead of local SQLite.",
     )
     parser.add_argument(
@@ -51,10 +52,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.api_url:
-        session = _load_session_from_api(args.api_url, args.session_id, args.user_id)
-    else:
-        session = _load_session(args.db_path, args.session_id)
+    session = _load_session_from_api(args.api_url, args.session_id, args.user_id)
     traces = _fetch_jaeger_traces(args.jaeger_url, args.session_id)
 
     if session is None and not traces:

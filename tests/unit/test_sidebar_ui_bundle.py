@@ -75,9 +75,15 @@ def test_overlay_js_handles_create_update_delete() -> None:
     assert "applyCreateOverlay" in js
     assert "applyUpdateOverlay" in js
     assert "applyDeleteOverlay" in js
-    assert "#FEF3C7" in js  # amber for create/update
+    assert "#ECFDF5" in js  # green tint for create/update preview
     assert "#FEE2E2" in js  # red for delete
     assert "line-through" in js  # strikethrough for delete
+
+
+def test_overlay_js_navigates_to_correct_tab() -> None:
+    js = _read("web/sidebar/overlay.js")
+    assert "navigateToTab" in js
+    assert "activateTabByName" in js
 
 
 def test_twig_templates_have_data_uuid() -> None:
