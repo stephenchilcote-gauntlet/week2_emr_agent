@@ -100,6 +100,10 @@
     wrapper.appendChild(frame)
     document.body.appendChild(wrapper)
 
+    var overlayScript = document.createElement("script")
+    overlayScript.src = "/agent-api/ui/assets/overlay.js"
+    document.head.appendChild(overlayScript)
+
     if (window.innerWidth >= MIN_WIDTH) {
       document.body.style.marginRight = "380px"
     }

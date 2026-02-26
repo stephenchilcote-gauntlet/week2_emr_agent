@@ -13,6 +13,7 @@
         <span class="header-title">Clinical Assistant</span>
         <div class="header-actions">
           <button id="history-toggle" class="header-btn" title="Conversation history">History</button>
+          <button id="audit-toggle" class="header-btn" title="Audit trail">Audit</button>
           <button id="new-conversation" class="header-btn" title="New conversation">+ New</button>
         </div>
       </div>
@@ -30,6 +31,10 @@
       <div id="history-list" class="history-list"></div>
     </div>
 
+    <div id="audit-panel" class="audit-panel hidden">
+      <div id="audit-list"></div>
+    </div>
+
     <main class="chat-shell" id="chat-shell">
       <section id="chat-area" class="chat-area" aria-live="polite"></section>
       <button id="new-messages-pill" class="new-messages-pill hidden">↓ New messages</button>
@@ -37,7 +42,11 @@
 
     <section id="review-panel" class="review-panel hidden">
       <div class="review-header">
-        <strong>Review Suggested Changes</strong>
+        <div class="review-tour-nav">
+          <button id="tour-prev" class="tour-arrow" title="Previous item" disabled>‹</button>
+          <span id="tour-progress" class="tour-progress">1 of 1</span>
+          <button id="tour-next" class="tour-arrow" title="Next item" disabled>›</button>
+        </div>
         <div class="review-header-actions">
           <button id="apply-all" class="btn-sm btn-accent">Apply All</button>
           <button id="reject-all" class="btn-sm btn-muted">Reject All</button>

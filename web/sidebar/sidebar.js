@@ -15,7 +15,12 @@ class SidebarApp {
       pendingMessages: false,
       showHistory: false,
       sessions: [],
+      tourIndex: 0,
+      verificationResults: null,
+      verificationPassed: null,
     }
+
+    this.abortController = null
 
     this.el = {
       statusPill: document.getElementById("status-pill"),
@@ -38,6 +43,12 @@ class SidebarApp {
       applyAll: document.getElementById("apply-all"),
       rejectAll: document.getElementById("reject-all"),
       executeButton: document.getElementById("execute-button"),
+      tourPrev: document.getElementById("tour-prev"),
+      tourNext: document.getElementById("tour-next"),
+      tourProgress: document.getElementById("tour-progress"),
+      auditToggle: document.getElementById("audit-toggle"),
+      auditPanel: document.getElementById("audit-panel"),
+      auditList: document.getElementById("audit-list"),
     }
 
     this.lastUserMessage = ""
@@ -108,6 +119,17 @@ class SidebarApp {
     this.el.applyAll.addEventListener("click", () => this.bulkReview("approved"))
     this.el.rejectAll.addEventListener("click", () => this.bulkReview("rejected"))
     this.el.executeButton.addEventListener("click", () => this.executeManifest())
+    if (this.el.auditToggle) {
+      this.el.auditToggle.addEventListener("click", () => this.toggleAuditPanel())
+    }
+    this.el.tourPrev.addEventListener("click", () => this.tourNavigate(-1))
+    this.el.tourNext.addEventListener("click", () => this.tourNavigate(1))
+
+    window.addEventListener("message", (event) => {
+      if (event.data && event.data.type === "overlay:result") {
+        this.handleOverlayResult(event.data)
+      }
+    })
 
     this.el.chatArea.addEventListener("scroll", () => {
       if (this.isNearBottom()) {
@@ -170,7 +192,11 @@ class SidebarApp {
       "openemr_user_id": DEFAULT_USER,
       ...(options.headers || {}),
     }
-    const response = await fetch(path, { ...options, headers })
+    const fetchOptions = { ...options, headers }
+    if (options.signal) {
+      fetchOptions.signal = options.signal
+    }
+    const response = await fetch(path, fetchOptions)
     if (!response.ok) {
       const text = await response.text()
       throw new Error(text || `HTTP ${response.status}`)
@@ -179,6 +205,10 @@ class SidebarApp {
   }
 
   async createSession(clearChat = false) {
+    if (this.abortController) {
+      this.abortController.abort()
+      this.abortController = null
+    }
     try {
       const data = await this.api("/api/sessions", { method: "POST" })
       this.state.sessionID = data.session_id
@@ -188,6 +218,7 @@ class SidebarApp {
         this.el.chatArea.innerHTML = ""
       }
       this.state.pendingManifest = null
+      this.state.tourIndex = 0
       this.renderReviewPanel()
       this.updateSessionDisplay()
       await this.loadSessionList()
@@ -258,6 +289,7 @@ class SidebarApp {
       }
 
       this.state.pendingManifest = data.manifest || null
+      this.state.tourIndex = 0
       this.renderReviewPanel()
       this.updateSessionDisplay()
       this.renderHistoryList()
@@ -285,6 +317,10 @@ class SidebarApp {
   }
 
   async sendMessage(messageOverride = null) {
+    if (this.state.phase === "thinking" || this.state.phase === "executing") {
+      return
+    }
+
     const raw = messageOverride !== null ? messageOverride : this.el.chatInput.value
     const message = raw.trim()
     if (!message) {
@@ -308,6 +344,10 @@ class SidebarApp {
     this.showTypingIndicator()
     const started = performance.now()
 
+    this.abortController = new AbortController()
+    const signal = this.abortController.signal
+    let hadError = false
+
     try {
       const data = await this.api("/api/chat", {
         method: "POST",
@@ -316,6 +356,7 @@ class SidebarApp {
           message,
           page_context: this.buildPageContext(),
         }),
+        signal,
       })
 
       this.state.sessionID = data.session_id
@@ -329,16 +370,22 @@ class SidebarApp {
       })
 
       this.state.pendingManifest = data.manifest || null
+      this.state.tourIndex = 0
       this.renderReviewPanel()
       this.setStatus(this.phaseToStatus(data.phase))
       await this.loadSessionList()
     } catch (error) {
       this.hideTypingIndicator()
+      if (error.name === "AbortError") {
+        return
+      }
+      hadError = true
       this.renderRetryableError(error.message)
       this.setStatus("error")
     } finally {
+      this.abortController = null
       this.toggleSend(true)
-      if (this.state.phase !== "reviewing") {
+      if (!hadError && this.state.phase !== "reviewing") {
         this.setStatus("ready")
       }
     }
@@ -458,57 +505,214 @@ class SidebarApp {
     const manifest = this.state.pendingManifest
     if (!manifest || !Array.isArray(manifest.items) || manifest.items.length === 0) {
       this.el.reviewPanel.classList.add("hidden")
+      this.postOverlayMessage({ type: "overlay:clear" })
       return
     }
 
     this.el.reviewPanel.classList.remove("hidden")
-    this.el.reviewCards.innerHTML = ""
+    const total = manifest.items.length
+    const idx = Math.max(0, Math.min(this.state.tourIndex, total - 1))
+    this.state.tourIndex = idx
+
+    this.el.tourProgress.textContent = `${idx + 1} of ${total}`
+    this.el.tourPrev.disabled = idx === 0
+    this.el.tourNext.disabled = idx === total - 1
+
+    this.renderTourCard(manifest.items[idx])
+    this.requestOverlay(manifest.items[idx])
 
     let approved = 0
     let rejected = 0
     let pending = 0
-
     for (const item of manifest.items) {
-      if (item.status === "approved") {
-        approved += 1
-      } else if (item.status === "rejected") {
-        rejected += 1
-      } else {
-        pending += 1
-      }
-
-      const card = document.createElement("article")
-      card.className = "review-card"
-      if (item.status === "approved" || item.status === "rejected") {
-        card.classList.add(`status-${item.status}`)
-      }
-
-      const statusBadge = `<span class="review-card-status badge-${item.status}">${item.status}</span>`
-      card.innerHTML = `
-        <div><strong>${this.escapeHtml(item.resource_type)}</strong> · ${this.escapeHtml(item.action)}${statusBadge}</div>
-        <div>${this.escapeHtml(item.description || "No description")}</div>
-      `
-
-      const edit = document.createElement("textarea")
-      edit.value = JSON.stringify(item.proposed_value || {}, null, 2)
-      card.appendChild(edit)
-
-      const actions = document.createElement("div")
-      actions.className = "review-card-actions"
-      const applyBtn = this.makeReviewButton("Apply", "btn-sm btn-accent", () => this.updateReviewItem(item.id, "approved", edit.value))
-      const rejectBtn = this.makeReviewButton("Reject", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "rejected", edit.value))
-      const undoBtn = this.makeReviewButton("Undo", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "pending", edit.value))
-      if (item.status === "approved") applyBtn.classList.add("active-status")
-      if (item.status === "rejected") rejectBtn.classList.add("active-status")
-      actions.appendChild(applyBtn)
-      actions.appendChild(rejectBtn)
-      actions.appendChild(undoBtn)
-      card.appendChild(actions)
-      this.el.reviewCards.appendChild(card)
+      if (item.status === "approved") approved += 1
+      else if (item.status === "rejected") rejected += 1
+      else pending += 1
     }
 
-    this.el.reviewSummary.textContent = `Apply: ${approved} | Rejected: ${rejected} | Pending: ${pending}`
-    this.el.executeButton.textContent = approved > 0 ? "Execute Changes" : "Discard All"
+    if (this.state.verificationPassed === false) {
+      this.el.reviewSummary.innerHTML = ""
+      const warn = document.createElement("div")
+      warn.className = "verification-summary"
+      warn.textContent = "⚠ Verification failed — resolve errors before executing"
+      this.el.reviewSummary.appendChild(warn)
+      this.el.executeButton.disabled = true
+    } else {
+      if (this.state.verificationPassed === true) {
+        this.el.reviewSummary.innerHTML = ""
+        const ok = document.createElement("div")
+        ok.className = "verification-summary all-passed"
+        ok.textContent = `✓ All checks passed · Apply: ${approved} | Rejected: ${rejected} | Pending: ${pending}`
+        this.el.reviewSummary.appendChild(ok)
+      } else {
+        this.el.reviewSummary.textContent = `Apply: ${approved} | Rejected: ${rejected} | Pending: ${pending}`
+      }
+      this.el.executeButton.disabled = false
+      this.el.executeButton.textContent = approved > 0 ? "Execute Changes" : "Discard All"
+    }
+  }
+
+  renderTourCard(item) {
+    this.el.reviewCards.innerHTML = ""
+    const card = document.createElement("article")
+    card.className = "review-card"
+    if (item.status === "approved" || item.status === "rejected") {
+      card.classList.add(`status-${item.status}`)
+    }
+
+    const actionIcons = { create: "+", update: "✎", delete: "✕" }
+    const header = document.createElement("div")
+    header.className = "review-card-header"
+
+    const icon = document.createElement("span")
+    icon.className = `review-card-action-icon action-${item.action}`
+    icon.textContent = actionIcons[item.action] || "?"
+    header.appendChild(icon)
+
+    const title = document.createElement("strong")
+    title.textContent = item.resource_type
+    header.appendChild(title)
+
+    const statusBadge = document.createElement("span")
+    statusBadge.className = `review-card-status badge-${item.status}`
+    statusBadge.textContent = item.status
+    header.appendChild(statusBadge)
+
+    if (item.confidence) {
+      const conf = document.createElement("span")
+      conf.className = `confidence-badge confidence-${item.confidence}`
+      conf.textContent = item.confidence
+      header.appendChild(conf)
+    }
+
+    card.appendChild(header)
+
+    const desc = document.createElement("div")
+    desc.className = "review-card-description"
+    desc.textContent = item.description || "No description"
+    card.appendChild(desc)
+
+    if (!this.isInPageResource(item.resource_type)) {
+      const note = document.createElement("div")
+      note.className = "review-card-sidebar-note"
+      note.textContent = "Cannot preview in-page — review details here."
+      card.appendChild(note)
+    }
+
+    if (item.current_value && (item.action === "update" || item.action === "delete")) {
+      const section = document.createElement("div")
+      section.className = "review-card-section"
+      const label = document.createElement("div")
+      label.className = "review-card-section-label"
+      label.textContent = "Current Value"
+      section.appendChild(label)
+      const current = document.createElement("div")
+      current.className = "review-card-current"
+      current.textContent = JSON.stringify(item.current_value, null, 2)
+      section.appendChild(current)
+      card.appendChild(section)
+    }
+
+    const propSection = document.createElement("div")
+    propSection.className = "review-card-section"
+    const propLabel = document.createElement("div")
+    propLabel.className = "review-card-section-label"
+    propLabel.textContent = "Proposed Value"
+    propSection.appendChild(propLabel)
+    const edit = document.createElement("textarea")
+    edit.value = JSON.stringify(item.proposed_value || {}, null, 2)
+    propSection.appendChild(edit)
+    card.appendChild(propSection)
+
+    if (item.source_reference) {
+      const srcDiv = document.createElement("div")
+      srcDiv.className = "review-card-source"
+      const srcLink = document.createElement("a")
+      srcLink.href = "#"
+      srcLink.textContent = `Source: ${item.source_reference}`
+      srcLink.addEventListener("click", (e) => e.preventDefault())
+      srcDiv.appendChild(srcLink)
+      card.appendChild(srcDiv)
+    }
+
+    const actions = document.createElement("div")
+    actions.className = "review-card-actions"
+    const applyBtn = this.makeReviewButton("Apply", "btn-sm btn-accent", () => this.updateReviewItem(item.id, "approved", edit.value))
+    const rejectBtn = this.makeReviewButton("Reject", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "rejected", edit.value))
+    const undoBtn = this.makeReviewButton("Undo", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "pending", edit.value))
+    if (item.status === "approved") applyBtn.classList.add("active-status")
+    if (item.status === "rejected") rejectBtn.classList.add("active-status")
+    actions.appendChild(applyBtn)
+    actions.appendChild(rejectBtn)
+    actions.appendChild(undoBtn)
+    card.appendChild(actions)
+
+    if (this.state.verificationResults && this.state.verificationResults.length > 0) {
+      const itemResults = this.state.verificationResults.filter((r) => r.item_id === item.id)
+      if (itemResults.length > 0) {
+        const checksDiv = document.createElement("div")
+        checksDiv.className = "verification-checks"
+        for (const check of itemResults) {
+          const row = document.createElement("div")
+          row.className = "verification-check"
+
+          const iconSpan = document.createElement("span")
+          const passed = check.passed !== false
+          iconSpan.className = `verification-check-icon ${passed ? "passed" : "failed-" + (check.severity || "error")}`
+          iconSpan.textContent = passed ? "✓" : "✗"
+          row.appendChild(iconSpan)
+
+          const nameSpan = document.createElement("span")
+          nameSpan.className = "verification-check-name"
+          nameSpan.textContent = (check.check_name || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+          row.appendChild(nameSpan)
+
+          const msgSpan = document.createElement("span")
+          msgSpan.className = "verification-check-message"
+          msgSpan.textContent = check.message || ""
+          row.appendChild(msgSpan)
+
+          checksDiv.appendChild(row)
+        }
+        card.appendChild(checksDiv)
+      }
+    }
+
+    this.el.reviewCards.appendChild(card)
+  }
+
+  isInPageResource(resourceType) {
+    const supported = ["Condition", "AllergyIntolerance", "MedicationRequest"]
+    return supported.includes(resourceType)
+  }
+
+  tourNavigate(delta) {
+    const manifest = this.state.pendingManifest
+    if (!manifest || !manifest.items.length) return
+    const newIndex = this.state.tourIndex + delta
+    if (newIndex < 0 || newIndex >= manifest.items.length) return
+    this.state.tourIndex = newIndex
+    this.renderReviewPanel()
+  }
+
+  postOverlayMessage(msg) {
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(msg, "*")
+      }
+    } catch (_e) {
+      // parent not accessible
+    }
+  }
+
+  requestOverlay(item) {
+    this.postOverlayMessage({ type: "overlay:apply", item })
+  }
+
+  handleOverlayResult(data) {
+    if (!data.applied && data.reason === "sidebar-only") {
+      // expected for non-dashboard resources, no action needed
+    }
   }
 
   makeReviewButton(label, className, onClick) {
@@ -548,7 +752,7 @@ class SidebarApp {
     }
 
     try {
-      await this.api(`/api/manifest/${this.state.sessionID}/approve`, {
+      const result = await this.api(`/api/manifest/${this.state.sessionID}/approve`, {
         method: "POST",
         body: JSON.stringify({
           approved_items: approvedItems,
@@ -556,6 +760,8 @@ class SidebarApp {
           modified_items: modifiedItems,
         }),
       })
+      this.state.verificationResults = result.results || []
+      this.state.verificationPassed = result.passed
       this.renderReviewPanel()
     } catch (error) {
       this.renderErrorBlock(`Failed to update manifest review: ${error.message}`)
@@ -599,6 +805,81 @@ class SidebarApp {
     } finally {
       this.toggleSend(true)
     }
+  }
+
+  async toggleAuditPanel() {
+    if (!this.el.auditPanel) return
+    const visible = !this.el.auditPanel.classList.contains("hidden")
+    if (visible) {
+      this.el.auditPanel.classList.add("hidden")
+      this.el.auditToggle.classList.remove("active")
+      return
+    }
+    this.el.auditPanel.classList.remove("hidden")
+    this.el.auditToggle.classList.add("active")
+    if (this.state.sessionID) {
+      await this.loadAuditTrail()
+    }
+  }
+
+  async loadAuditTrail() {
+    if (!this.el.auditList) return
+    try {
+      const data = await this.api(`/api/sessions/${this.state.sessionID}/audit`)
+      const events = data.events || data || []
+      this.el.auditList.innerHTML = ""
+      if (events.length === 0) {
+        this.el.auditList.textContent = "No audit events yet."
+        return
+      }
+      for (const event of events) {
+        const row = document.createElement("div")
+        row.className = "audit-event"
+
+        const time = document.createElement("span")
+        time.className = "audit-event-time"
+        time.textContent = this.formatAuditTime(event.timestamp)
+        row.appendChild(time)
+
+        const type = document.createElement("span")
+        type.className = "audit-event-type"
+        type.textContent = this.formatEventType(event.event_type)
+        row.appendChild(type)
+
+        const summary = document.createElement("span")
+        summary.className = "audit-event-summary"
+        summary.textContent = event.summary || ""
+        row.appendChild(summary)
+
+        this.el.auditList.appendChild(row)
+      }
+    } catch (error) {
+      this.el.auditList.textContent = `Failed to load audit trail: ${error.message}`
+    }
+  }
+
+  formatAuditTime(timestamp) {
+    if (!timestamp) return ""
+    try {
+      const d = new Date(timestamp)
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    } catch (_e) {
+      return timestamp
+    }
+  }
+
+  formatEventType(eventType) {
+    if (!eventType) return ""
+    const icons = {
+      chat_received: "💬",
+      assistant_responded: "🤖",
+      manifest_reviewed: "📋",
+      manifest_executed: "⚡",
+      verification_ran: "🔍",
+    }
+    const icon = icons[eventType] || "•"
+    const label = eventType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+    return `${icon} ${label}`
   }
 
   resizeInput() {
