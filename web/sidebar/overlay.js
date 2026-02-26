@@ -76,6 +76,44 @@
     return container
   }
 
+  function createActionButtons(frameDoc, item) {
+    var grid = frameDoc.createElement("div")
+    grid.className = "agent-overlay-actions"
+    grid.style.cssText =
+      "display:grid;grid-template-columns:1fr 1fr;gap:2px;" +
+      "margin-left:auto;flex-shrink:0;padding:2px;"
+
+    var btnStyle =
+      "border:1px solid #d1d5db;border-radius:3px;cursor:pointer;" +
+      "font-size:11px;padding:1px 6px;background:#fff;color:#374151;" +
+      "line-height:1.4;"
+
+    var buttons = [
+      { label: "\u2713", cls: "overlay-btn-accept", msg: { type: "overlay:accept", itemId: item.id } },
+      { label: "\u2717", cls: "overlay-btn-reject", msg: { type: "overlay:reject", itemId: item.id } },
+      { label: "\u2039", cls: "overlay-btn-prev",   msg: { type: "overlay:navigate", delta: -1 } },
+      { label: "\u203A", cls: "overlay-btn-next",   msg: { type: "overlay:navigate", delta: 1 } },
+    ]
+
+    for (var i = 0; i < buttons.length; i++) {
+      var b = buttons[i]
+      var btn = frameDoc.createElement("button")
+      btn.className = b.cls
+      btn.textContent = b.label
+      btn.dataset.itemId = item.id
+      btn.style.cssText = btnStyle
+      ;(function (message) {
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation()
+          window.postMessage(message, "*")
+        })
+      })(b.msg)
+      grid.appendChild(btn)
+    }
+
+    return grid
+  }
+
   function createBadge(text, color) {
     var badge = document.createElement("span")
     badge.className = "agent-overlay-badge"
@@ -231,6 +269,7 @@
     fill.appendChild(statusSpan)
 
     summary.appendChild(fill)
+    summary.appendChild(createActionButtons(frameDoc, item))
     ghost.appendChild(summary)
 
     listGroup.insertBefore(ghost, listGroup.firstChild)
@@ -263,6 +302,10 @@
       injectedElements.push({ element: diffEl, frameDoc: frameDoc })
     }
 
+    var actionsEl = createActionButtons(frameDoc, item)
+    row.appendChild(actionsEl)
+    injectedElements.push({ element: actionsEl, frameDoc: frameDoc })
+
     injectedElements.push({ element: row, frameDoc: frameDoc, restoreBg: true })
     scrollIntoView(row)
 
@@ -287,6 +330,11 @@
     var badge = createBadge("Remove", "#dc2626")
     row.appendChild(badge)
     injectedElements.push({ element: badge, frameDoc: frameDoc })
+
+    var actionsEl = createActionButtons(frameDoc, item)
+    row.appendChild(actionsEl)
+    injectedElements.push({ element: actionsEl, frameDoc: frameDoc })
+
     injectedElements.push({ element: row, frameDoc: frameDoc, restoreDelete: true })
     scrollIntoView(row)
 
@@ -336,6 +384,47 @@
     }
   }
 
+  function applySingleOverlay(item) {
+    var mapping = RESOURCE_PAGE_MAP[item.resource_type]
+    if (!mapping || !mapping.supportsRowTarget) {
+      return { applied: false, reason: "sidebar-only" }
+    }
+
+    if (item.action === "create") {
+      return applyCreateOverlay(item, mapping)
+    }
+    if (item.action === "update") {
+      return applyUpdateOverlay(item, mapping)
+    }
+    if (item.action === "delete") {
+      return applyDeleteOverlay(item, mapping)
+    }
+
+    return { applied: false, reason: "Unknown action: " + item.action }
+  }
+
+  function applyAllOverlays(items) {
+    clearAllOverlays()
+
+    var navigated = {}
+    var results = []
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i]
+      var mapping = RESOURCE_PAGE_MAP[item.resource_type]
+      if (mapping && mapping.supportsRowTarget && !navigated[mapping.tab]) {
+        navigateToTab(mapping.tab)
+        navigated[mapping.tab] = true
+      }
+      var result = applySingleOverlay(item)
+      results.push({
+        itemId: item.id,
+        applied: result.applied,
+        reason: result.reason || null,
+      })
+    }
+    return results
+  }
+
   function applyOverlay(item) {
     var mapping = RESOURCE_PAGE_MAP[item.resource_type]
     if (!mapping || !mapping.supportsRowTarget) {
@@ -374,6 +463,16 @@
       }
     }
 
+    if (event.data.type === "overlay:applyAll") {
+      var results = applyAllOverlays(event.data.items || [])
+      if (event.source) {
+        event.source.postMessage({
+          type: "overlay:allResults",
+          results: results,
+        }, "*")
+      }
+    }
+
     if (event.data.type === "overlay:clear") {
       clearAllOverlays()
     }
@@ -381,6 +480,7 @@
 
   window.__overlayEngine = {
     applyOverlay: applyOverlay,
+    applyAllOverlays: applyAllOverlays,
     clearAllOverlays: clearAllOverlays,
     navigateToTab: navigateToTab,
     RESOURCE_PAGE_MAP: RESOURCE_PAGE_MAP,
