@@ -43,6 +43,9 @@ services:
       - openemr_sites:/var/www/localhost/htdocs/openemr/sites
       - openemr_logs:/var/log
       - ./openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public:/var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public
+      - ./web/sidebar/sidebar.js:/var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/sidebar.js
+      - ./web/sidebar/sidebar.css:/var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/sidebar.css
+      - ./web/sidebar/overlay.js:/var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/overlay.js
     depends_on:
       mysql:
         condition: service_healthy

@@ -40,7 +40,7 @@ services:
     volumes:
       - openemr_sites:/var/www/localhost/htdocs/openemr/sites
       - openemr_logs:/var/log
-      - letsencrypt:/etc/letsencrypt
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       mysql:
         condition: service_healthy
@@ -59,6 +59,8 @@ services:
       OPENEMR_FHIR_URL: ${OPENEMR_FHIR_URL:-http://openemr:80/apis/default/fhir}
       OPENEMR_CLIENT_ID: ${OPENEMR_CLIENT_ID}
       OPENEMR_CLIENT_SECRET: ${OPENEMR_CLIENT_SECRET}
+      OPENEMR_USER: ${OPENEMR_USER:-admin}
+      OPENEMR_PASS: ${OPENEMR_PASS:-pass}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
@@ -87,5 +89,4 @@ volumes:
   mysql_data:
   openemr_sites:
   openemr_logs:
-  letsencrypt:
   agent_data:

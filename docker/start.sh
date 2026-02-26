@@ -9,8 +9,25 @@ if [[ -f "$LE_CERT" && -f "$LE_KEY" ]]; then
     cp "$LE_KEY" /etc/ssl/private/webserver.key.pem
 fi
 
-# Redirect bare-IP access to the domain name so the cert matches
+# Reverse proxy /agent-api/ → agent backend
 CONF="/etc/apache2/conf.d/openemr.conf"
+AGENT_URL="${OPENEMR_AGENT_API_URL:-http://agent:8000}"
+if ! grep -q 'agent-api' "$CONF" 2>/dev/null; then
+    echo "Adding /agent-api/ reverse proxy to $AGENT_URL"
+    sed -i '/^LoadModule rewrite_module/a\
+LoadModule proxy_module modules/mod_proxy.so\
+LoadModule proxy_http_module modules/mod_proxy_http.so' "$CONF"
+
+    sed -i '/<VirtualHost \*:80>/a\
+    ProxyPass /agent-api/ '"$AGENT_URL"'/\
+    ProxyPassReverse /agent-api/ '"$AGENT_URL"'/' "$CONF"
+
+    sed -i '/<VirtualHost _default_:443>/a\
+    ProxyPass /agent-api/ '"$AGENT_URL"'/\
+    ProxyPassReverse /agent-api/ '"$AGENT_URL"'/' "$CONF"
+fi
+
+# Redirect bare-IP access to the domain name so the cert matches
 if ! grep -q 'emragent.404.mn' "$CONF" 2>/dev/null; then
     echo "Adding IP-to-domain redirect rules"
     sed -i '/<VirtualHost \*:80>/a\
