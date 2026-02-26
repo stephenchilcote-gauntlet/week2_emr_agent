@@ -142,6 +142,21 @@ docker compose down -v && docker compose up -d --build
 - OTLP endpoint (gRPC): `http://jaeger:4317` (internal) / `http://localhost:4317` (host)
 - FastAPI auto-instrumented via `opentelemetry-instrumentation-fastapi`
 
+## Anthropic Model IDs (as of Feb 2026)
+
+| Model            | API ID                        | Alias              | Notes                                    |
+|------------------|-------------------------------|--------------------|-----------------------------------------|
+| Claude Opus 4.6  | `claude-opus-4-6`             | `claude-opus-4-6`  | Latest frontier model                   |
+| Claude Sonnet 4.6| `claude-sonnet-4-6`           | `claude-sonnet-4-6`| Best speed/intelligence balance         |
+| Claude Haiku 4.5 | `claude-haiku-4-5-20251001`   | `claude-haiku-4-5` | Fastest, cheapest ($1/$5 per MTok)      |
+
+- `claude-3-5-haiku-20241022` reached EOL on Feb 19, 2026 — no longer works.
+- `claude-haiku-4-20250514` never existed — that was a hallucinated model ID.
+- The LLM judge in `tests/e2e/llm_judge.py` uses Haiku 4.5 for cost-effective eval.
+- Kimi K2.5 via OpenRouter (`moonshotai/kimi-k2.5`) needs `max_tokens >= 2048` because
+  its reasoning tokens consume the token budget (empty content with `finish_reason: length`
+  at lower values).
+
 ## Known Issues
 
 - OpenEMR flex startup is slow (~3-4 min) — agent will fail FHIR calls during this window

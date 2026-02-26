@@ -16,11 +16,15 @@ if ! grep -q 'emragent.404.mn' "$CONF" 2>/dev/null; then
     sed -i '/<VirtualHost \*:80>/a\
     RewriteEngine On\
     RewriteCond %{HTTP_HOST} !^emragent\\.404\\.mn$ [NC]\
+    RewriteCond %{HTTP_HOST} !^openemr [NC]\
+    RewriteCond %{HTTP_HOST} !^localhost [NC]\
     RewriteRule ^(.*)$ https://emragent.404.mn$1 [R=301,L]' "$CONF"
 
     sed -i '/<VirtualHost _default_:443>/a\
     RewriteEngine On\
     RewriteCond %{HTTP_HOST} !^emragent\\.404\\.mn$ [NC]\
+    RewriteCond %{HTTP_HOST} !^openemr [NC]\
+    RewriteCond %{HTTP_HOST} !^localhost [NC]\
     RewriteRule ^(.*)$ https://emragent.404.mn$1 [R=301,L]' "$CONF"
 fi
 

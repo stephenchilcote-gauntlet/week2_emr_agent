@@ -38,9 +38,23 @@ def main() -> None:
         default="http://localhost:16686",
         help="Jaeger query base URL (default: http://localhost:16686)",
     )
+    parser.add_argument(
+        "--api-url",
+        default=None,
+        help="Remote agent API base URL (e.g. http://localhost:8000). "
+             "When set, fetches session data from the API instead of local SQLite.",
+    )
+    parser.add_argument(
+        "--user-id",
+        default="1",
+        help="OpenEMR user ID for API authentication (default: 1)",
+    )
     args = parser.parse_args()
 
-    session = _load_session(args.db_path, args.session_id)
+    if args.api_url:
+        session = _load_session_from_api(args.api_url, args.session_id, args.user_id)
+    else:
+        session = _load_session(args.db_path, args.session_id)
     traces = _fetch_jaeger_traces(args.jaeger_url, args.session_id)
 
     if session is None and not traces:
@@ -75,6 +89,20 @@ def main() -> None:
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
+
+
+def _load_session_from_api(api_url: str, session_id: str, user_id: str) -> dict | None:
+    url = f"{api_url.rstrip('/')}/api/sessions/{session_id}/messages"
+    try:
+        resp = httpx.get(url, headers={"openemr_user_id": user_id}, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        print(f"⚠ API error {exc.response.status_code}: {exc.response.text}", file=sys.stderr)
+        return None
+    except httpx.ConnectError as exc:
+        print(f"⚠ Cannot connect to API at {api_url}: {exc}", file=sys.stderr)
+        return None
 
 
 def _load_session(db_path: str, session_id: str) -> dict | None:
