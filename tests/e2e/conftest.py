@@ -66,12 +66,17 @@ def select_patient(
     page: Page,
     patient_id: int | str,
     patient_name: str | None = None,
+    encounter_id: str | None = None,
 ) -> None:
     """Select a patient in OpenEMR via left_nav.setPatient.
 
     This is the same mechanism OpenEMR uses when a clinician clicks on a
     patient in the search results — it sets the active patient in the
     Knockout view model, which the sidebar's embed.js picks up via polling.
+
+    If ``encounter_id`` is provided, also sets the active encounter via
+    the Knockout ``selectedEncounterID`` observable so that the sidebar
+    picks it up during its context refresh poll.
     """
     pid = int(patient_id)
     name = patient_name or f"Patient {pid}"
@@ -81,8 +86,38 @@ def select_patient(
             top.left_nav.setPatient({json.dumps(name)}, {pid}, '', '');
         }}"""
     )
+    if encounter_id:
+        page.evaluate(
+            f"""() => {{
+                const top = window.top || window;
+                if (typeof top.setEncounter === 'function') {{
+                    top.setEncounter({json.dumps(encounter_id)});
+                }} else if (top.app_view_model) {{
+                    const patient = top.app_view_model.application_data.patient();
+                    if (patient) {{
+                        if (typeof patient.selectedEncounterID === 'function') {{
+                            patient.selectedEncounterID({json.dumps(encounter_id)});
+                        }} else if (typeof ko !== 'undefined') {{
+                            patient.selectedEncounterID = ko.observable({json.dumps(encounter_id)});
+                        }}
+                    }}
+                }}
+            }}"""
+        )
     # Give the sidebar's 2-second context poll time to pick it up
     page.wait_for_timeout(3000)
+    # Directly set the encounter on openemrAgentContext as a fallback —
+    # embed.js polls every 2s and may not read the Knockout observable
+    # if selectedEncounterID was never initialised by the OpenEMR UI.
+    if encounter_id:
+        page.evaluate(
+            f"""() => {{
+                const top = window.top || window;
+                if (top.openemrAgentContext) {{
+                    top.openemrAgentContext.encounter = {json.dumps(encounter_id)};
+                }}
+            }}"""
+        )
 
 
 def get_sidebar_frame(page: Page) -> Frame:

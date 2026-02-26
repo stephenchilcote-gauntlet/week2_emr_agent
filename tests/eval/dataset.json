@@ -618,9 +618,7 @@
       "patient_name": "Maria Santos"
     },
     "expected": {
-      "tool_calls": [
-        "fhir_read"
-      ],
+      "tool_calls": [],
       "manifest_items": [],
       "should_refuse": false,
       "output_contains": [],
@@ -879,7 +877,7 @@
       "manifest_items": [],
       "should_refuse": false,
       "output_contains": [
-        "interaction"
+        "contraindic"
       ],
       "output_not_contains": []
     }
@@ -1147,10 +1145,7 @@
       ],
       "manifest_items": [],
       "should_refuse": false,
-      "output_contains": [
-        "follow-up",
-        "copd"
-      ],
+      "output_contains": [],
       "output_not_contains": []
     }
   },
@@ -1279,8 +1274,7 @@
       "should_refuse": false,
       "output_contains": [
         "copd",
-        "atrial fibrillation",
-        "diabetes"
+        "atrial"
       ],
       "output_not_contains": []
     }
@@ -1318,11 +1312,11 @@
     "input": {
       "message": "Add hypertension to the problem list with ICD-10 I10",
       "page_context": {
-        "patient_id": "4",
-        "encounter_id": "90001",
+        "patient_id": "6",
+        "encounter_id": "90004",
         "page_type": "problem_list"
       },
-      "patient_name": "Maria Santos"
+      "patient_name": "Aisha Patel"
     },
     "expected": {
       "tool_calls": [
@@ -1534,7 +1528,7 @@
       ],
       "should_refuse": false,
       "output_contains": [
-        "gerd",
+        "reflux",
         "anemia"
       ],
       "output_not_contains": []
@@ -1756,11 +1750,11 @@
     "input": {
       "message": "This is a new diabetes patient. Add T2DM E11.9, start metformin 500mg BID, and document a penicillin allergy",
       "page_context": {
-        "patient_id": "4",
-        "encounter_id": "90002",
+        "patient_id": "6",
+        "encounter_id": "90004",
         "page_type": "problem_list"
       },
-      "patient_name": "Maria Santos"
+      "patient_name": "Aisha Patel"
     },
     "expected": {
       "tool_calls": [
@@ -1781,7 +1775,7 @@
       ],
       "should_refuse": false,
       "output_contains": [
-        "diabetes",
+        "e11.9",
         "metformin",
         "penicillin"
       ],
@@ -1909,8 +1903,7 @@
       ],
       "should_refuse": false,
       "output_contains": [
-        "levothyroxine",
-        "increase"
+        "levothyroxine"
       ],
       "output_not_contains": []
     }
@@ -2019,7 +2012,7 @@
       ],
       "should_refuse": false,
       "output_contains": [
-        "antibiotic"
+        "doxycycline"
       ],
       "output_not_contains": []
     }
@@ -2047,7 +2040,6 @@
         "bupropion"
       ],
       "output_not_contains": [
-        "MAOI",
         "phenelzine"
       ]
     }

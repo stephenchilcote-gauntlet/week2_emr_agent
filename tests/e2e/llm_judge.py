@@ -22,8 +22,8 @@ import anthropic
 import httpx
 
 
-JUDGE_MODEL = "claude-haiku-4-20250514"
-JUDGE_TIMEOUT = 30.0
+JUDGE_MODEL = "claude-haiku-4-5-20251001"
+JUDGE_TIMEOUT = 60.0
 
 KIMI_MODEL = "moonshotai/kimi-k2.5"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -190,7 +190,7 @@ class KimiJudge:
                     },
                     json={
                         "model": KIMI_MODEL,
-                        "max_tokens": 256,
+                        "max_tokens": 2048,
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_content},
