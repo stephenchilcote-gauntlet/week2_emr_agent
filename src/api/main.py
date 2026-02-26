@@ -49,6 +49,8 @@ async def lifespan(app: FastAPI):
         fhir_url=fhir_url,
         client_id=os.environ.get("OPENEMR_CLIENT_ID", ""),
         client_secret=os.environ.get("OPENEMR_CLIENT_SECRET", ""),
+        username=os.environ.get("OPENEMR_USER", "admin"),
+        password=os.environ.get("OPENEMR_PASS", "pass"),
     )
     tool_registry = ToolRegistry(openemr_client)
     register_default_tools(tool_registry)

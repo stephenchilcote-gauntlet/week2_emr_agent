@@ -810,6 +810,16 @@ class AgentLoop:
             action_map = {"add": "create", "edit": "update", "remove": "delete"}
             dsl_items = parse_manifest_dsl(raw_items)
             for dsl_item in dsl_items:
+                proposed = dsl_item_to_proposed_value(dsl_item)
+                if "ref" in proposed:
+                    proposed["ref"] = self._resolve_manifest_reference(
+                        proposed["ref"], session,
+                    )
+                raw_target = (
+                    dsl_item.ref.split("/", 1)[1]
+                    if dsl_item.ref and "/" in dsl_item.ref
+                    else None
+                )
                 items.append(
                     ManifestItem(
                         id=dsl_item.item_id,
@@ -817,7 +827,7 @@ class AgentLoop:
                         action=ManifestAction(
                             action_map[dsl_item.action]
                         ),
-                        proposed_value=dsl_item_to_proposed_value(dsl_item),
+                        proposed_value=proposed,
                         source_reference=self._resolve_manifest_reference(
                             dsl_item.source_reference,
                             session,
@@ -826,9 +836,8 @@ class AgentLoop:
                         confidence=dsl_item.confidence,
                         depends_on=dsl_item.depends_on,
                         target_resource_id=(
-                            dsl_item.ref.split("/", 1)[1]
-                            if dsl_item.ref and "/" in dsl_item.ref
-                            else None
+                            resolve_identifier(raw_target)
+                            if raw_target else None
                         ),
                     )
                 )
