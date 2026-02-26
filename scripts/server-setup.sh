@@ -3,10 +3,10 @@
 # Usage: ssh root@YOUR_IP 'bash -s' < scripts/server-setup.sh
 set -euo pipefail
 
-echo "=== [1/5] System update ==="
+echo "=== [1/6] System update ==="
 apt-get update && apt-get upgrade -y
 
-echo "=== [2/5] Install Docker ==="
+echo "=== [2/6] Install Docker ==="
 apt-get install -y ca-certificates curl gnupg
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -18,10 +18,10 @@ echo \
 apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
-echo "=== [3/5] Enable Docker ==="
+echo "=== [3/6] Enable Docker ==="
 systemctl enable --now docker
 
-echo "=== [4/5] Firewall (ufw) ==="
+echo "=== [4/6] Firewall (ufw) ==="
 apt-get install -y ufw
 ufw default deny incoming
 ufw default allow outgoing
@@ -31,6 +31,12 @@ ufw allow 443/tcp   # OpenEMR HTTPS
 # Agent (8000) and Jaeger (16686) are NOT exposed — access via SSH tunnel
 ufw --force enable
 
-echo "=== [5/5] Create app directory ==="
+echo "=== [5/6] Install certbot ==="
+apt-get install -y certbot
+
+echo "=== [6/6] Create app directory ==="
 mkdir -p /opt/emr-agent
 echo "=== Server setup complete ==="
+echo ""
+echo "Next: obtain Let's Encrypt certs (port 80 must be free):"
+echo "  certbot certonly --standalone -d YOUR_DOMAIN"
