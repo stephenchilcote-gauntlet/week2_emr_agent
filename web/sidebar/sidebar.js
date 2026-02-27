@@ -2,6 +2,159 @@ const SESSION_KEY = "openemr_agent_session_id"
 const DEFAULT_USER = "demo-user"
 const MAX_CHARS = 8000
 const WARN_CHARS = 7500
+const RESOURCE_DISPLAY_NAMES = {
+  Condition: "Medical Problems",
+  AllergyIntolerance: "Allergies",
+  MedicationRequest: "Medications",
+  Encounter: "Encounters",
+  Observation: "Vitals/Observations",
+  Vital: "Vitals",
+  SoapNote: "SOAP Note",
+  Procedure: "Procedures",
+  DiagnosticReport: "Reports",
+}
+
+const ACTION_LABELS = {
+  create: "Add",
+  update: "Update",
+  delete: "Remove",
+}
+
+const VERIFICATION_LABELS = {
+  grounding: { name: "Source", passedMsg: "Source verified in patient record" },
+  confidence: { name: "Clarity", passedMsg: "Recommendation is clearly stated" },
+  conflict: { name: "Conflicts", passedMsg: "No conflicts with current record" },
+  constraint_icd10: { name: "Diagnosis Code", passedMsg: null },
+  constraint_cpt: { name: "Procedure Code", passedMsg: null },
+  constraint_document_sections: { name: "Document", passedMsg: null },
+  medication_high_risk: { name: "Safety", passedMsg: null },
+  medication_required_fields: { name: "Required Info", passedMsg: null },
+  medication_duplicate: { name: "Duplicates", passedMsg: null },
+  medication_allergy: { name: "Allergy Check", passedMsg: null },
+}
+
+const VALUE_FIELD_LABELS = {
+  ref: null,
+  status: "Status",
+  title: "Name",
+  code: "Code",
+  code_text: "Description",
+  display: "Description",
+  drug: "Medication",
+  dose: "Dose",
+  route: "Route",
+  freq: "Frequency",
+  begdate: "Start date",
+  enddate: "End date",
+  severity: "Severity",
+  reaction: "Reaction",
+  onset: "Onset",
+  type: "Type",
+  outcome: "Outcome",
+  occurrence: "Occurrence",
+  note: "Notes",
+  document: "Note text",
+  text: "Note text",
+  verification: "Verification",
+  clinical_status: "Clinical status",
+  category: "Category",
+  subjective: "Subjective",
+  objective: "Objective",
+  assessment: "Assessment",
+  plan: "Plan",
+  reason: "Reason",
+  facility: "Facility",
+  date: "Date",
+  onset_date: "Onset Date",
+  sensitivity: null,
+  pc_catid: null,
+  bps: "Systolic BP",
+  bpd: "Diastolic BP",
+  weight: "Weight",
+  height: "Height",
+  temperature: "Temperature",
+  temp_method: null,
+  pulse: "Pulse",
+  respiration: "Respiration",
+  oxygen_saturation: "O₂ Sat",
+  waist_circ: "Waist",
+  head_circ: "Head Circ",
+}
+
+function humanizeFieldValue(key, value) {
+  if (value === null || value === undefined) return null
+  if (typeof value === "object") return null
+  const str = String(value)
+  if (key === "status" || key === "verification" || key === "clinical_status") {
+    return str.charAt(0).toUpperCase() + str.slice(1).replace(/_/g, " ")
+  }
+  return str
+}
+
+function formatValueSummary(valueObj) {
+  if (!valueObj || typeof valueObj !== "object") return []
+  const lines = []
+  for (const [key, value] of Object.entries(valueObj)) {
+    const label = VALUE_FIELD_LABELS[key]
+    if (label === null) continue
+    if (label === undefined && typeof value === "object") continue
+    const displayLabel = label || (key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, " "))
+    const displayValue = humanizeFieldValue(key, value)
+    if (displayValue) {
+      lines.push({ label: displayLabel, value: displayValue })
+    }
+  }
+  return lines
+}
+
+function formatSourceReference(ref) {
+  if (!ref) return null
+  const match = ref.match(/^(\w+)\//)
+  if (!match) return ref
+  const type = match[1]
+  const typeLabels = {
+    Encounter: "Based on current encounter",
+    Patient: "Based on patient record",
+    Condition: "Based on existing condition",
+    MedicationRequest: "Based on existing medication",
+    AllergyIntolerance: "Based on existing allergy record",
+    Observation: "Based on recorded observation",
+    Procedure: "Based on procedure record",
+    DiagnosticReport: "Based on diagnostic report",
+  }
+  return typeLabels[type] || `Based on ${RESOURCE_DISPLAY_NAMES[type] || type} record`
+}
+
+function formatVerificationCheck(check) {
+  const info = VERIFICATION_LABELS[check.check_name] || {}
+  const name = info.name || check.check_name.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+  const passed = check.passed !== false
+  let message = check.message || ""
+  if (passed && info.passedMsg) {
+    message = info.passedMsg
+  } else if (!passed) {
+    message = message
+      .replace(/\b\w+\/[0-9a-f]{8}-[0-9a-f-]+/gi, s => {
+        const m = s.match(/^(\w+)\//)
+        return m ? (RESOURCE_DISPLAY_NAMES[m[1]] || m[1]).toLowerCase() + " record" : s
+      })
+  }
+  return { name, message, passed }
+}
+
+function formatExecutionContent(text) {
+  const match = text.match(/^Execution complete\.\s*(\d+)\s*succeeded,\s*(\d+)\s*failed,\s*(\d+)\s*skipped\.?$/i)
+  if (!match) return null
+  const succeeded = parseInt(match[1], 10)
+  const failed = parseInt(match[2], 10)
+  const total = succeeded + failed
+  if (total === 0) return "No changes were applied."
+  if (failed === 0 && succeeded === 1) return "✓ Change applied successfully."
+  if (failed === 0) return `✓ All ${succeeded} changes applied successfully.`
+  if (succeeded === 0 && failed === 1) return "The change could not be applied. Please review and try again."
+  if (succeeded === 0) return `${failed} changes could not be applied. Please review and try again.`
+  return `${succeeded} change${succeeded > 1 ? "s" : ""} applied. ${failed} could not be completed — please review.`
+}
 
 class SidebarApp {
   constructor() {
@@ -18,6 +171,7 @@ class SidebarApp {
       tourIndex: 0,
       verificationResults: null,
       verificationPassed: null,
+      manifestOpenemrPid: null,
     }
 
     this.abortController = null
@@ -220,9 +374,11 @@ class SidebarApp {
     } else {
       url = path
     }
+    const authToken = window.OPENEMR_AUTH_TOKEN
     const headers = {
       "Content-Type": "application/json",
       ...(proxyBase ? {} : { "openemr_user_id": DEFAULT_USER }),
+      ...(authToken ? { "X-Sidebar-Token": authToken } : {}),
       ...(options.headers || {}),
     }
     const fetchOptions = { ...options, headers }
@@ -298,7 +454,10 @@ class SidebarApp {
       const meta = document.createElement("div")
       meta.className = "history-item-meta"
       const patient = session.patient_name || session.patient_id || "No patient"
-      meta.textContent = patient
+      const cost = session.total_cost_usd > 0
+        ? ` · $${session.total_cost_usd < 0.01 ? session.total_cost_usd.toFixed(4) : session.total_cost_usd.toFixed(2)}`
+        : ""
+      meta.textContent = `${patient}${cost}`
       btn.appendChild(meta)
 
       btn.addEventListener("click", () => {
@@ -322,7 +481,10 @@ class SidebarApp {
       }
 
       this.state.pendingManifest = data.manifest || null
+      this.state.manifestOpenemrPid = data.openemr_pid || null
       this.state.tourIndex = 0
+      this.state.tourCardHeight = 0
+      this.el.reviewCards.style.minHeight = ""
       this.renderReviewPanel()
       this.updateSessionDisplay()
       this.renderHistoryList()
@@ -366,7 +528,9 @@ class SidebarApp {
     }
 
     this.lastUserMessage = message
-    this.renderMessage("user", message)
+    if (messageOverride === null) {
+      this.renderMessage("user", message)
+    }
     this.el.chatInput.value = ""
     this.resizeInput()
     this.updateCharacterCounter()
@@ -403,7 +567,10 @@ class SidebarApp {
       })
 
       this.state.pendingManifest = data.manifest || null
+      this.state.manifestOpenemrPid = data.openemr_pid || null
       this.state.tourIndex = 0
+      this.state.tourCardHeight = 0
+      this.el.reviewCards.style.minHeight = ""
       this.renderReviewPanel()
       this.setStatus(this.phaseToStatus(data.phase))
       await this.loadSessionList()
@@ -461,17 +628,25 @@ class SidebarApp {
   }
 
   renderMessage(role, content, metadata = null) {
+    const messageIndex = this.el.chatArea.querySelectorAll(".message").length
     const block = document.createElement("article")
     block.className = `message role-${role}`
+    block.dataset.messageIndex = messageIndex
 
     const label = document.createElement("div")
     label.className = "message-label"
     label.textContent = role === "user" ? "You" : "Assistant"
     block.appendChild(label)
 
+    let displayContent = content
+    if (role === "assistant") {
+      const friendly = formatExecutionContent(content)
+      if (friendly) displayContent = friendly
+    }
+
     const markdown = document.createElement("div")
     markdown.className = "markdown"
-    markdown.innerHTML = this.renderMarkdown(content)
+    markdown.innerHTML = this.renderMarkdown(displayContent)
     block.appendChild(markdown)
 
     if (metadata) {
@@ -501,8 +676,49 @@ class SidebarApp {
       }
     }
 
+    if (role === "assistant" && content) {
+      block.appendChild(this.renderFeedbackButtons(messageIndex))
+    }
+
     this.el.chatArea.appendChild(block)
     this.scrollToBottom()
+  }
+
+  renderFeedbackButtons(messageIndex) {
+    const container = document.createElement("div")
+    container.className = "feedback-buttons"
+
+    const upBtn = document.createElement("button")
+    upBtn.className = "feedback-btn"
+    upBtn.dataset.rating = "up"
+    upBtn.title = "Helpful"
+    upBtn.textContent = "👍"
+
+    const downBtn = document.createElement("button")
+    downBtn.className = "feedback-btn"
+    downBtn.dataset.rating = "down"
+    downBtn.title = "Not helpful"
+    downBtn.textContent = "👎"
+
+    const handler = async (rating, btn) => {
+      container.querySelectorAll(".feedback-btn").forEach(b => b.classList.remove("active"))
+      btn.classList.add("active")
+      try {
+        await this.api(`/api/sessions/${this.state.sessionID}/feedback`, {
+          method: "POST",
+          body: JSON.stringify({ message_index: messageIndex, rating }),
+        })
+      } catch (_e) {
+        btn.classList.remove("active")
+      }
+    }
+
+    upBtn.addEventListener("click", () => handler("up", upBtn))
+    downBtn.addEventListener("click", () => handler("down", downBtn))
+
+    container.appendChild(upBtn)
+    container.appendChild(downBtn)
+    return container
   }
 
   renderRetryableError(text) {
@@ -551,8 +767,12 @@ class SidebarApp {
     this.el.tourPrev.disabled = idx === 0
     this.el.tourNext.disabled = idx === total - 1
 
+    if (!this.state.tourCardHeight) {
+      this.measureMaxCardHeight(manifest.items)
+    }
+
     this.renderTourCard(manifest.items[idx])
-    this.requestAllOverlays(manifest.items)
+    this.requestAllOverlays(manifest.items, idx)
 
     let approved = 0
     let rejected = 0
@@ -575,10 +795,10 @@ class SidebarApp {
         this.el.reviewSummary.innerHTML = ""
         const ok = document.createElement("div")
         ok.className = "verification-summary all-passed"
-        ok.textContent = `✓ All checks passed · Apply: ${approved} | Rejected: ${rejected} | Pending: ${pending}`
+        ok.textContent = `✓ All checks passed · ${approved} to apply, ${rejected} rejected, ${pending} pending`
         this.el.reviewSummary.appendChild(ok)
       } else {
-        this.el.reviewSummary.textContent = `Apply: ${approved} | Rejected: ${rejected} | Pending: ${pending}`
+        this.el.reviewSummary.textContent = `${approved} to apply, ${rejected} rejected, ${pending} pending`
       }
       this.el.executeButton.disabled = false
       this.el.executeButton.textContent = approved > 0 ? "Execute Changes" : "Discard All"
@@ -602,8 +822,10 @@ class SidebarApp {
     icon.textContent = actionIcons[item.action] || "?"
     header.appendChild(icon)
 
+    const actionLabel = ACTION_LABELS[item.action] || item.action
+    const resourceLabel = RESOURCE_DISPLAY_NAMES[item.resource_type] || item.resource_type
     const title = document.createElement("strong")
-    title.textContent = item.resource_type
+    title.textContent = `${actionLabel} ${resourceLabel}`
     header.appendChild(title)
 
     const statusBadge = document.createElement("span")
@@ -611,10 +833,10 @@ class SidebarApp {
     statusBadge.textContent = item.status
     header.appendChild(statusBadge)
 
-    if (item.confidence) {
+    if (item.confidence && item.confidence !== "high") {
       const conf = document.createElement("span")
       conf.className = `confidence-badge confidence-${item.confidence}`
-      conf.textContent = item.confidence
+      conf.textContent = item.confidence === "low" ? "⚠ Needs review" : "Review suggested"
       header.appendChild(conf)
     }
 
@@ -633,46 +855,63 @@ class SidebarApp {
     }
 
     if (item.current_value && (item.action === "update" || item.action === "delete")) {
-      const section = document.createElement("div")
-      section.className = "review-card-section"
-      const label = document.createElement("div")
-      label.className = "review-card-section-label"
-      label.textContent = "Current Value"
-      section.appendChild(label)
-      const current = document.createElement("div")
-      current.className = "review-card-current"
-      current.textContent = JSON.stringify(item.current_value, null, 2)
-      section.appendChild(current)
-      card.appendChild(section)
+      const currentLines = formatValueSummary(item.current_value)
+      if (currentLines.length > 0) {
+        const section = document.createElement("div")
+        section.className = "review-card-section"
+        const label = document.createElement("div")
+        label.className = "review-card-section-label"
+        label.textContent = "Current"
+        section.appendChild(label)
+        const current = document.createElement("div")
+        current.className = "review-card-current"
+        current.textContent = currentLines.map(l => `${l.label}: ${l.value}`).join("\n")
+        section.appendChild(current)
+        card.appendChild(section)
+      }
     }
 
+    const proposedLines = formatValueSummary(item.proposed_value)
     const propSection = document.createElement("div")
     propSection.className = "review-card-section"
     const propLabel = document.createElement("div")
     propLabel.className = "review-card-section-label"
-    propLabel.textContent = "Proposed Value"
+    propLabel.textContent = "Proposed Changes"
     propSection.appendChild(propLabel)
-    const edit = document.createElement("textarea")
-    edit.value = JSON.stringify(item.proposed_value || {}, null, 2)
-    propSection.appendChild(edit)
+
+    if (proposedLines.length > 0) {
+      const summaryDiv = document.createElement("div")
+      summaryDiv.className = "review-card-value-summary"
+      for (const line of proposedLines) {
+        const row = document.createElement("div")
+        row.className = "review-card-value-row"
+        const k = document.createElement("span")
+        k.className = "review-card-value-label"
+        k.textContent = line.label
+        const v = document.createElement("span")
+        v.className = "review-card-value-content"
+        v.textContent = line.value
+        row.appendChild(k)
+        row.appendChild(v)
+        summaryDiv.appendChild(row)
+      }
+      propSection.appendChild(summaryDiv)
+    }
+
     card.appendChild(propSection)
 
     if (item.source_reference) {
       const srcDiv = document.createElement("div")
       srcDiv.className = "review-card-source"
-      const srcLink = document.createElement("a")
-      srcLink.href = "#"
-      srcLink.textContent = `Source: ${item.source_reference}`
-      srcLink.addEventListener("click", (e) => e.preventDefault())
-      srcDiv.appendChild(srcLink)
+      srcDiv.textContent = formatSourceReference(item.source_reference)
       card.appendChild(srcDiv)
     }
 
     const actions = document.createElement("div")
     actions.className = "review-card-actions"
-    const applyBtn = this.makeReviewButton("Apply", "btn-sm btn-accent", () => this.updateReviewItem(item.id, "approved", edit.value))
-    const rejectBtn = this.makeReviewButton("Reject", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "rejected", edit.value))
-    const undoBtn = this.makeReviewButton("Undo", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "pending", edit.value))
+    const applyBtn = this.makeReviewButton("Apply", "btn-sm btn-accent", () => this.updateReviewItem(item.id, "approved", item.proposed_value))
+    const rejectBtn = this.makeReviewButton("Reject", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "rejected", item.proposed_value))
+    const undoBtn = this.makeReviewButton("Undo", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "pending", item.proposed_value))
     if (item.status === "approved") applyBtn.classList.add("active-status")
     if (item.status === "rejected") rejectBtn.classList.add("active-status")
     actions.appendChild(applyBtn)
@@ -686,23 +925,23 @@ class SidebarApp {
         const checksDiv = document.createElement("div")
         checksDiv.className = "verification-checks"
         for (const check of itemResults) {
+          const formatted = formatVerificationCheck(check)
           const row = document.createElement("div")
           row.className = "verification-check"
 
           const iconSpan = document.createElement("span")
-          const passed = check.passed !== false
-          iconSpan.className = `verification-check-icon ${passed ? "passed" : "failed-" + (check.severity || "error")}`
-          iconSpan.textContent = passed ? "✓" : "✗"
+          iconSpan.className = `verification-check-icon ${formatted.passed ? "passed" : "failed-" + (check.severity || "error")}`
+          iconSpan.textContent = formatted.passed ? "✓" : "✗"
           row.appendChild(iconSpan)
 
           const nameSpan = document.createElement("span")
           nameSpan.className = "verification-check-name"
-          nameSpan.textContent = (check.check_name || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+          nameSpan.textContent = formatted.name
           row.appendChild(nameSpan)
 
           const msgSpan = document.createElement("span")
           msgSpan.className = "verification-check-message"
-          msgSpan.textContent = check.message || ""
+          msgSpan.textContent = formatted.message
           row.appendChild(msgSpan)
 
           checksDiv.appendChild(row)
@@ -712,6 +951,23 @@ class SidebarApp {
     }
 
     this.el.reviewCards.appendChild(card)
+  }
+
+  measureMaxCardHeight(items) {
+    this.el.reviewCards.style.visibility = "hidden"
+    let maxH = 0
+    for (const item of items) {
+      this.renderTourCard(item)
+      const card = this.el.reviewCards.firstElementChild
+      if (card) {
+        maxH = Math.max(maxH, this.el.reviewCards.scrollHeight)
+      }
+    }
+    this.el.reviewCards.style.visibility = ""
+    this.state.tourCardHeight = maxH
+    if (maxH > 0) {
+      this.el.reviewCards.style.height = `${maxH}px`
+    }
   }
 
   isInPageResource(resourceType) {
@@ -742,8 +998,9 @@ class SidebarApp {
     this.postOverlayMessage({ type: "overlay:apply", item })
   }
 
-  requestAllOverlays(items) {
-    this.postOverlayMessage({ type: "overlay:applyAll", items })
+  requestAllOverlays(items, focusIndex) {
+    const patientID = this.state.manifestOpenemrPid || this.state.patientID
+    this.postOverlayMessage({ type: "overlay:applyAll", items, focusIndex: focusIndex || 0, patientID })
   }
 
   handleOverlayResult(data) {
@@ -756,7 +1013,7 @@ class SidebarApp {
     if (!this.state.pendingManifest) return
     const item = this.state.pendingManifest.items.find((i) => i.id === itemId)
     if (!item) return
-    this.updateReviewItem(itemId, status, JSON.stringify(item.proposed_value || {}))
+    this.updateReviewItem(itemId, status, item.proposed_value || {})
   }
 
   makeReviewButton(label, className, onClick) {
@@ -767,7 +1024,7 @@ class SidebarApp {
     return button
   }
 
-  async updateReviewItem(itemID, status, proposedValueText) {
+  async updateReviewItem(itemID, status, proposedValue) {
     if (!this.state.pendingManifest) {
       return
     }
@@ -778,14 +1035,8 @@ class SidebarApp {
     for (const item of this.state.pendingManifest.items) {
       if (item.id === itemID) {
         item.status = status
-        try {
-          const parsed = JSON.parse(proposedValueText)
-          item.proposed_value = parsed
-          modifiedItems.push({ id: item.id, proposed_value: parsed })
-        } catch (_error) {
-          this.renderErrorBlock("Invalid JSON in modified value.")
-          return
-        }
+        item.proposed_value = proposedValue
+        modifiedItems.push({ id: item.id, proposed_value: proposedValue })
       }
       if (item.status === "approved") {
         approvedItems.push(item.id)
@@ -820,7 +1071,7 @@ class SidebarApp {
       item.status = status
     }
     this.renderReviewPanel()
-    await this.updateReviewItem(this.state.pendingManifest.items[0].id, status, JSON.stringify(this.state.pendingManifest.items[0].proposed_value || {}))
+    await this.updateReviewItem(this.state.pendingManifest.items[0].id, status, this.state.pendingManifest.items[0].proposed_value || {})
   }
 
   async executeManifest() {
@@ -839,7 +1090,11 @@ class SidebarApp {
     this.toggleSend(false)
     try {
       const data = await this.api(`/api/manifest/${this.state.sessionID}/execute`, { method: "POST" })
-      this.renderSystemNotice(`Execution finished: ${data.manifest_status || "completed"}.`)
+      const items = data.items || []
+      const completed = items.filter(i => i.status === "completed").length
+      const failed = items.filter(i => i.status === "failed").length
+      const statusMsg = formatExecutionContent(`Execution complete. ${completed} succeeded, ${failed} failed, 0 skipped.`) || "Changes processed."
+      this.renderSystemNotice(statusMsg)
       this.state.pendingManifest = null
       this.renderReviewPanel()
       this.setStatus("ready")
@@ -988,16 +1243,7 @@ class SidebarApp {
   }
 
   renderMarkdown(text) {
-    let rendered = this.escapeHtml(text || "")
-    rendered = rendered.replace(/`([^`]+)`/g, "<code>$1</code>")
-    rendered = rendered.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    rendered = rendered.replace(/\*([^*]+)\*/g, "<em>$1</em>")
-    rendered = rendered.replace(/\n/g, "<br>")
-    rendered = rendered.replace(
-      /\b([A-Z][A-Za-z]+\/[A-Za-z0-9\-\.]+)\b/g,
-      "<code>$1</code>"
-    )
-    return rendered
+    return marked.parse(text || "", { breaks: true })
   }
 
   escapeHtml(value) {

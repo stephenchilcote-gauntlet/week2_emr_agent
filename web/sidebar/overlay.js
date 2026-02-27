@@ -18,12 +18,12 @@
       rowSelector: ".list-group-item",
       supportsRowTarget: true,
     },
-    Encounter: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
+    Encounter: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
     Observation: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
+    Vital: { tab: "pat", container: "#vitals_ps_expand", supportsRowTarget: true },
+    SoapNote: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
     Procedure: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
     DiagnosticReport: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
-    Vital: { tab: "pat", container: "#vitals_ps_expand", rowSelector: null, supportsRowTarget: false },
-    SoapNote: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
   }
 
   var injectedElements = []
@@ -37,6 +37,18 @@
     } catch (_e) {
       // cross-origin or not loaded
     }
+    return null
+  }
+
+  function getFrameDocumentForMapping(mapping) {
+    var frameDoc = getFrameDocument(mapping.tab)
+    if (!frameDoc || !mapping.nestedFrame) return frameDoc
+    try {
+      var innerFrame = frameDoc.querySelector("iframe[name='" + mapping.nestedFrame + "']")
+      if (innerFrame && innerFrame.contentDocument) {
+        return innerFrame.contentDocument
+      }
+    } catch (_e) {}
     return null
   }
 
@@ -78,12 +90,12 @@
     return container
   }
 
-  function createActionButtons(frameDoc, item) {
+  function createActionButtons(frameDoc, item, isFocused) {
     var grid = frameDoc.createElement("div")
     grid.className = "agent-overlay-actions"
     grid.style.cssText =
-      "display:grid;grid-template-columns:1fr 1fr;gap:2px;" +
-      "margin-left:auto;flex-shrink:0;padding:2px;"
+      "display:grid;grid-template-columns:auto auto;gap:2px;" +
+      "margin-left:auto;flex-shrink:0;padding:2px;width:fit-content;"
 
     var btnStyle =
       "border:1px solid #d1d5db;border-radius:3px;cursor:pointer;" +
@@ -93,9 +105,14 @@
     var buttons = [
       { label: "\u2713", cls: "overlay-btn-accept", msg: { type: "overlay:accept", itemId: item.id } },
       { label: "\u2717", cls: "overlay-btn-reject", msg: { type: "overlay:reject", itemId: item.id } },
-      { label: "\u2039", cls: "overlay-btn-prev",   msg: { type: "overlay:navigate", delta: -1 } },
-      { label: "\u203A", cls: "overlay-btn-next",   msg: { type: "overlay:navigate", delta: 1 } },
     ]
+
+    if (isFocused) {
+      buttons.push(
+        { label: "\u2039", cls: "overlay-btn-prev",   msg: { type: "overlay:navigate", delta: -1 } },
+        { label: "\u203A", cls: "overlay-btn-next",   msg: { type: "overlay:navigate", delta: 1 } }
+      )
+    }
 
     for (var i = 0; i < buttons.length; i++) {
       var b = buttons[i]
@@ -116,8 +133,8 @@
     return grid
   }
 
-  function createBadge(text, color) {
-    var badge = document.createElement("span")
+  function createBadge(doc, text, color) {
+    var badge = doc.createElement("span")
     badge.className = "agent-overlay-badge"
     badge.textContent = text
     badge.style.cssText =
@@ -125,6 +142,24 @@
       "border-radius:4px;margin-left:6px;vertical-align:middle;" +
       "background:" + color + ";color:#fff;"
     return badge
+  }
+
+  function createStatusBadge(doc, status) {
+    if (status === "approved") return createBadge(doc, "\u2713 Approved", "#15803d")
+    if (status === "rejected") return createBadge(doc, "\u2717 Rejected", "#b91c1c")
+    return null
+  }
+
+  function createConfidenceBadge(doc, confidence, status) {
+    if (status === "approved" || status === "rejected") return null
+    if (!confidence || confidence === "high") return null
+    if (confidence === "medium") return createBadge(doc, "\u26A0 Review suggested", "#d97706")
+    if (confidence === "low") return createBadge(doc, "\u26A0 Needs review", "#b91c1c")
+    return null
+  }
+
+  function applyFocusStyle(el) {
+    el.style.boxShadow = "0 0 0 2px #0f766e, 0 0 8px rgba(15, 118, 110, 0.25)"
   }
 
   function buildDisplayTitle(item) {
@@ -236,9 +271,19 @@
     return container
   }
 
-  function applyCreateOverlay(item, mapping) {
-    var frameDoc = getFrameDocument(mapping.tab)
+  function applyCreateOverlay(item, mapping, isFocused) {
+    var frameDoc = getFrameDocumentForMapping(mapping)
     if (!frameDoc) return { applied: false, reason: "Frame not available" }
+
+    if (item.resource_type === "SoapNote") {
+      return applyCreateOverlaySoap(frameDoc, item, isFocused)
+    }
+    if (item.resource_type === "Encounter") {
+      return applyCreateOverlayEncounter(frameDoc, item, isFocused)
+    }
+    if (item.resource_type === "Vital") {
+      return applyCreateOverlayVital(frameDoc, item, isFocused)
+    }
 
     var container = getContainerEl(frameDoc, mapping.container)
     if (!container) return { applied: false, reason: "Container not found" }
@@ -251,8 +296,15 @@
     // Build a ghost row that matches the real EMR row structure
     var ghost = frameDoc.createElement("div")
     ghost.className = "list-group-item p-1 agent-overlay-ghost"
-    ghost.style.cssText =
-      "background:#ECFDF5;border-left:3px solid #10b981;opacity:0.85;"
+    if (item.status === "rejected") {
+      ghost.style.cssText = "background:#f9fafb;border-left:3px solid #d1d5db;opacity:0.5;"
+    } else if (item.status === "approved") {
+      ghost.style.cssText = "background:#f0fdf4;border-left:3px solid #15803d;opacity:0.85;"
+    } else {
+      ghost.style.cssText = "background:#ECFDF5;border-left:3px solid #10b981;opacity:0.85;"
+    }
+
+    if (isFocused) applyFocusStyle(ghost)
 
     var summary = frameDoc.createElement("div")
     summary.className = "summary m-0 p-0 d-flex w-100 align-content-center"
@@ -265,25 +317,33 @@
     titleEl.textContent = buildDisplayTitle(item)
     fill.appendChild(titleEl)
 
-    var statusSpan = frameDoc.createElement("span")
-    statusSpan.textContent = " (Pending)"
-    statusSpan.style.cssText = "font-style:italic;color:#6b7280;"
-    fill.appendChild(statusSpan)
+    var statusBadge = createStatusBadge(frameDoc, item.status)
+    if (statusBadge) {
+      fill.appendChild(statusBadge)
+    } else {
+      var pendingSpan = frameDoc.createElement("span")
+      pendingSpan.textContent = " (Pending)"
+      pendingSpan.style.cssText = "font-style:italic;color:#6b7280;"
+      fill.appendChild(pendingSpan)
+    }
+
+    var confBadge = createConfidenceBadge(frameDoc, item.confidence, item.status)
+    if (confBadge) fill.appendChild(confBadge)
 
     summary.appendChild(fill)
-    summary.appendChild(createActionButtons(frameDoc, item))
+    summary.appendChild(createActionButtons(frameDoc, item, isFocused))
     ghost.appendChild(summary)
 
     listGroup.insertBefore(ghost, listGroup.firstChild)
     injectedElements.push({ element: ghost, frameDoc: frameDoc })
-    scrollIntoView(ghost)
+    if (isFocused) scrollIntoView(ghost)
 
     return { applied: true }
   }
 
-  function applyUpdateOverlay(item, mapping) {
+  function applyUpdateOverlay(item, mapping, isFocused) {
     var uuid = extractUuid(item.target_resource_id)
-    var frameDoc = getFrameDocument(mapping.tab)
+    var frameDoc = getFrameDocumentForMapping(mapping)
     if (!frameDoc) return { applied: false, reason: "Frame not available" }
 
     var row = findRowByUuid(frameDoc, mapping.container, uuid)
@@ -291,55 +351,295 @@
 
     row.dataset.originalBg = row.style.background || ""
     row.dataset.originalBorderLeft = row.style.borderLeft || ""
-    row.style.background = "#ECFDF5"
-    row.style.borderLeft = "3px solid #10b981"
+    row.dataset.originalOpacity = row.style.opacity || ""
+    row.dataset.originalBoxShadow = row.style.boxShadow || ""
+    if (item.status === "rejected") {
+      row.style.background = "#f9fafb"
+      row.style.borderLeft = "3px solid #d1d5db"
+      row.style.opacity = "0.5"
+    } else if (item.status === "approved") {
+      row.style.background = "#f0fdf4"
+      row.style.borderLeft = "3px solid #15803d"
+    } else {
+      row.style.background = "#FFFBEB"
+      row.style.borderLeft = "3px solid #d97706"
+    }
+
+    if (isFocused) applyFocusStyle(row)
 
     // Read current text straight from the DOM row
     var currentText = row.textContent.trim()
     var proposedText = buildProposedRowText(currentText, item)
 
+    // Wrap existing content + actions in a flex layout matching creation overlay
+    var wrapper = frameDoc.createElement("div")
+    wrapper.style.cssText = "display:flex;align-items:center;width:100%;"
+
+    var contentDiv = frameDoc.createElement("div")
+    contentDiv.style.cssText = "flex:1 1 auto;min-width:0;"
+    while (row.firstChild) {
+      contentDiv.appendChild(row.firstChild)
+    }
+
     if (proposedText && proposedText !== currentText) {
       var diffEl = renderWordDiff(frameDoc, currentText, proposedText)
-      row.appendChild(diffEl)
+      contentDiv.appendChild(diffEl)
       injectedElements.push({ element: diffEl, frameDoc: frameDoc })
     }
 
-    var actionsEl = createActionButtons(frameDoc, item)
-    row.appendChild(actionsEl)
-    injectedElements.push({ element: actionsEl, frameDoc: frameDoc })
+    var statusBadge = createStatusBadge(frameDoc, item.status)
+    if (statusBadge) {
+      contentDiv.appendChild(statusBadge)
+      injectedElements.push({ element: statusBadge, frameDoc: frameDoc })
+    }
+
+    var confBadge2 = createConfidenceBadge(frameDoc, item.confidence, item.status)
+    if (confBadge2) {
+      contentDiv.appendChild(confBadge2)
+      injectedElements.push({ element: confBadge2, frameDoc: frameDoc })
+    }
+
+    wrapper.appendChild(contentDiv)
+    wrapper.appendChild(createActionButtons(frameDoc, item, isFocused))
+    row.appendChild(wrapper)
+    injectedElements.push({ element: wrapper, frameDoc: frameDoc, unwrap: true })
 
     injectedElements.push({ element: row, frameDoc: frameDoc, restoreBg: true })
-    scrollIntoView(row)
+    if (isFocused) scrollIntoView(row)
 
     return { applied: true }
   }
 
-  function applyDeleteOverlay(item, mapping) {
+  function applyDeleteOverlay(item, mapping, isFocused) {
     var uuid = extractUuid(item.target_resource_id)
-    var frameDoc = getFrameDocument(mapping.tab)
+    var frameDoc = getFrameDocumentForMapping(mapping)
     if (!frameDoc) return { applied: false, reason: "Frame not available" }
 
     var row = findRowByUuid(frameDoc, mapping.container, uuid)
     if (!row) return { applied: false, reason: "Row not found for UUID " + uuid }
 
     row.dataset.originalBg = row.style.background || ""
+    row.dataset.originalBorderLeft = row.style.borderLeft || ""
     row.dataset.originalTextDecoration = row.style.textDecoration || ""
     row.dataset.originalOpacity = row.style.opacity || ""
-    row.style.background = "#FEE2E2"
-    row.style.textDecoration = "line-through"
-    row.style.opacity = "0.6"
+    row.dataset.originalBoxShadow = row.style.boxShadow || ""
 
-    var badge = createBadge("Remove", "#dc2626")
-    row.appendChild(badge)
-    injectedElements.push({ element: badge, frameDoc: frameDoc })
+    if (item.status === "rejected") {
+      row.style.background = "#f9fafb"
+      row.style.borderLeft = "3px solid #d1d5db"
+      row.style.opacity = "0.5"
+    } else if (item.status === "approved") {
+      row.style.background = "#f0fdf4"
+      row.style.borderLeft = "3px solid #15803d"
+      row.style.textDecoration = "line-through"
+      row.style.opacity = "0.6"
+    } else {
+      row.style.background = "#FEE2E2"
+      row.style.textDecoration = "line-through"
+      row.style.opacity = "0.6"
+    }
 
-    var actionsEl = createActionButtons(frameDoc, item)
-    row.appendChild(actionsEl)
-    injectedElements.push({ element: actionsEl, frameDoc: frameDoc })
+    if (isFocused) applyFocusStyle(row)
+
+    // Wrap existing content + actions in a flex layout matching creation overlay
+    var wrapper = frameDoc.createElement("div")
+    wrapper.style.cssText = "display:flex;align-items:center;width:100%;"
+
+    var contentDiv = frameDoc.createElement("div")
+    contentDiv.style.cssText = "flex:1 1 auto;min-width:0;"
+    while (row.firstChild) {
+      contentDiv.appendChild(row.firstChild)
+    }
+
+    var statusBadge = createStatusBadge(frameDoc, item.status)
+    if (statusBadge) {
+      contentDiv.appendChild(statusBadge)
+      injectedElements.push({ element: statusBadge, frameDoc: frameDoc })
+    }
+
+    var confBadge3 = createConfidenceBadge(frameDoc, item.confidence, item.status)
+    if (confBadge3) {
+      contentDiv.appendChild(confBadge3)
+      injectedElements.push({ element: confBadge3, frameDoc: frameDoc })
+    }
+
+    wrapper.appendChild(contentDiv)
+    wrapper.appendChild(createActionButtons(frameDoc, item, isFocused))
+    row.appendChild(wrapper)
+    injectedElements.push({ element: wrapper, frameDoc: frameDoc, unwrap: true })
 
     injectedElements.push({ element: row, frameDoc: frameDoc, restoreDelete: true })
-    scrollIntoView(row)
+    if (isFocused) scrollIntoView(row)
 
+    return { applied: true }
+  }
+
+  function buildFormHolderGhost(frameDoc, item, isFocused, title, fields) {
+    var ghost = frameDoc.createElement("div")
+    ghost.className = "form-holder agent-overlay-ghost"
+    if (item.status === "rejected") {
+      ghost.style.cssText = "background:#f9fafb;border-left:3px solid #d1d5db;opacity:0.5;"
+    } else if (item.status === "approved") {
+      ghost.style.cssText = "background:#f0fdf4;border-left:3px solid #15803d;opacity:0.85;"
+    } else {
+      ghost.style.cssText = "background:#ECFDF5;border-left:3px solid #10b981;opacity:0.85;"
+    }
+    if (isFocused) applyFocusStyle(ghost)
+
+    var header = frameDoc.createElement("div")
+    header.className = "form-header border-bottom border-dark w-100 d-flex align-items-center justify-content-between"
+
+    var headerFill = frameDoc.createElement("div")
+    headerFill.className = "form_header flex-fill pl-2"
+    var h5 = frameDoc.createElement("h5")
+    h5.className = "mb-0"
+    h5.appendChild(frameDoc.createTextNode(title + " "))
+    var small = frameDoc.createElement("small")
+    small.className = "text-muted"
+    small.textContent = "(Proposed)"
+    h5.appendChild(small)
+
+    var statusBadge = createStatusBadge(frameDoc, item.status)
+    if (statusBadge) {
+      h5.appendChild(statusBadge)
+    } else {
+      var pendingSpan = frameDoc.createElement("span")
+      pendingSpan.textContent = " (Pending)"
+      pendingSpan.style.cssText = "font-style:italic;color:#6b7280;"
+      h5.appendChild(pendingSpan)
+    }
+    var confBadge = createConfidenceBadge(frameDoc, item.confidence, item.status)
+    if (confBadge) h5.appendChild(confBadge)
+
+    headerFill.appendChild(h5)
+    header.appendChild(headerFill)
+    header.appendChild(createActionButtons(frameDoc, item, isFocused))
+    ghost.appendChild(header)
+
+    var detail = frameDoc.createElement("div")
+    detail.className = "form-detail formrow"
+    var detailInner = frameDoc.createElement("div")
+    detailInner.className = "mb-5"
+
+    var table = frameDoc.createElement("table")
+    for (var i = 0; i < fields.length; i++) {
+      if (!fields[i].value) continue
+      var tr = frameDoc.createElement("tr")
+      var td = frameDoc.createElement("td")
+      var labelSpan = frameDoc.createElement("span")
+      labelSpan.className = "bold"
+      labelSpan.textContent = fields[i].label + ": "
+      td.appendChild(labelSpan)
+      var valueSpan = frameDoc.createElement("span")
+      valueSpan.className = "text"
+      valueSpan.textContent = fields[i].value
+      td.appendChild(valueSpan)
+      tr.appendChild(td)
+      table.appendChild(tr)
+    }
+
+    detailInner.appendChild(table)
+    detail.appendChild(detailInner)
+    ghost.appendChild(detail)
+    return ghost
+  }
+
+  function applyCreateOverlaySoap(frameDoc, item, isFocused) {
+    var container = frameDoc.querySelector("#partable")
+    if (!container) return { applied: false, reason: "Container #partable not found" }
+
+    var pv = item.proposed_value || {}
+    var ghost = buildFormHolderGhost(frameDoc, item, isFocused, "SOAP", [
+      { label: "Subjective", value: pv.subjective },
+      { label: "Objective", value: pv.objective },
+      { label: "Assessment", value: pv.assessment },
+      { label: "Plan", value: pv.plan },
+    ])
+
+    container.insertBefore(ghost, container.firstChild)
+    injectedElements.push({ element: ghost, frameDoc: frameDoc })
+    if (isFocused) scrollIntoView(ghost)
+    return { applied: true }
+  }
+
+  function applyCreateOverlayEncounter(frameDoc, item, isFocused) {
+    var container = frameDoc.querySelector("#partable")
+    if (!container) return { applied: false, reason: "Container #partable not found" }
+
+    var pv = item.proposed_value || {}
+    var ghost = buildFormHolderGhost(frameDoc, item, isFocused, "Visit Summary", [
+      { label: "Reason", value: pv.reason || item.description },
+      { label: "Date", value: pv.date },
+      { label: "Facility", value: pv.facility },
+    ])
+
+    container.insertBefore(ghost, container.firstChild)
+    injectedElements.push({ element: ghost, frameDoc: frameDoc })
+    if (isFocused) scrollIntoView(ghost)
+    return { applied: true }
+  }
+
+  function applyCreateOverlayVital(frameDoc, item, isFocused) {
+    var container = getContainerEl(frameDoc, "#vitals_ps_expand")
+    if (!container) return { applied: false, reason: "Container not found" }
+
+    var pv = item.proposed_value || {}
+    var ghost = frameDoc.createElement("div")
+    ghost.className = "agent-overlay-ghost"
+    if (item.status === "rejected") {
+      ghost.style.cssText = "background:#f9fafb;border-left:3px solid #d1d5db;opacity:0.5;padding:8px;margin-bottom:8px;"
+    } else if (item.status === "approved") {
+      ghost.style.cssText = "background:#f0fdf4;border-left:3px solid #15803d;opacity:0.85;padding:8px;margin-bottom:8px;"
+    } else {
+      ghost.style.cssText = "background:#ECFDF5;border-left:3px solid #10b981;opacity:0.85;padding:8px;margin-bottom:8px;"
+    }
+    if (isFocused) applyFocusStyle(ghost)
+
+    var summary = frameDoc.createElement("div")
+    summary.style.cssText = "display:flex;align-items:center;width:100%;"
+
+    var fill = frameDoc.createElement("div")
+    fill.style.cssText = "flex:1 1 auto;min-width:0;"
+
+    var titleEl = frameDoc.createElement("b")
+    titleEl.textContent = "Proposed Vitals"
+    fill.appendChild(titleEl)
+
+    var statusBadge = createStatusBadge(frameDoc, item.status)
+    if (statusBadge) {
+      fill.appendChild(statusBadge)
+    } else {
+      var pendingSpan = frameDoc.createElement("span")
+      pendingSpan.textContent = " (Pending)"
+      pendingSpan.style.cssText = "font-style:italic;color:#6b7280;"
+      fill.appendChild(pendingSpan)
+    }
+    var confBadge = createConfidenceBadge(frameDoc, item.confidence, item.status)
+    if (confBadge) fill.appendChild(confBadge)
+
+    var parts = []
+    if (pv.bps || pv.bpd) parts.push("BP: " + (pv.bps || "?") + "/" + (pv.bpd || "?"))
+    if (pv.temperature) parts.push("Temp: " + pv.temperature)
+    if (pv.pulse) parts.push("Pulse: " + pv.pulse)
+    if (pv.respiration) parts.push("Resp: " + pv.respiration)
+    if (pv.oxygen_saturation) parts.push("O\u2082: " + pv.oxygen_saturation + "%")
+    if (pv.weight) parts.push("Wt: " + pv.weight)
+    if (pv.height) parts.push("Ht: " + pv.height)
+
+    if (parts.length > 0) {
+      var detailEl = frameDoc.createElement("div")
+      detailEl.style.cssText = "margin-top:4px;font-size:13px;"
+      detailEl.textContent = parts.join(" \u00b7 ")
+      fill.appendChild(detailEl)
+    }
+
+    summary.appendChild(fill)
+    summary.appendChild(createActionButtons(frameDoc, item, isFocused))
+    ghost.appendChild(summary)
+
+    container.insertBefore(ghost, container.firstChild)
+    injectedElements.push({ element: ghost, frameDoc: frameDoc })
+    if (isFocused) scrollIntoView(ghost)
     return { applied: true }
   }
 
@@ -354,6 +654,49 @@
     } catch (_e) {
       // ignore
     }
+  }
+
+  function clearAllOverlays() {
+    for (var i = injectedElements.length - 1; i >= 0; i--) {
+      var entry = injectedElements[i]
+      if (entry.restoreBg) {
+        entry.element.style.background = entry.element.dataset.originalBg || ""
+        entry.element.style.borderLeft = entry.element.dataset.originalBorderLeft || ""
+        entry.element.style.opacity = entry.element.dataset.originalOpacity || ""
+        entry.element.style.boxShadow = entry.element.dataset.originalBoxShadow || ""
+        delete entry.element.dataset.originalBg
+        delete entry.element.dataset.originalBorderLeft
+        delete entry.element.dataset.originalOpacity
+        delete entry.element.dataset.originalBoxShadow
+      } else if (entry.restoreDelete) {
+        entry.element.style.background = entry.element.dataset.originalBg || ""
+        entry.element.style.borderLeft = entry.element.dataset.originalBorderLeft || ""
+        entry.element.style.textDecoration = entry.element.dataset.originalTextDecoration || ""
+        entry.element.style.opacity = entry.element.dataset.originalOpacity || ""
+        entry.element.style.boxShadow = entry.element.dataset.originalBoxShadow || ""
+        delete entry.element.dataset.originalBg
+        delete entry.element.dataset.originalBorderLeft
+        delete entry.element.dataset.originalTextDecoration
+        delete entry.element.dataset.originalOpacity
+        delete entry.element.dataset.originalBoxShadow
+      } else if (entry.unwrap) {
+        var parent = entry.element.parentNode
+        if (parent) {
+          var contentDiv = entry.element.firstChild
+          if (contentDiv) {
+            while (contentDiv.firstChild) {
+              parent.insertBefore(contentDiv.firstChild, entry.element)
+            }
+          }
+          parent.removeChild(entry.element)
+        }
+      } else {
+        if (entry.element.parentNode) {
+          entry.element.parentNode.removeChild(entry.element)
+        }
+      }
+    }
+    injectedElements = []
   }
 
   function getCurrentPatientPid() {
@@ -390,44 +733,23 @@
       }
     })
 
+    // Poll until the Knockout model reflects the new patient
     var attempts = 0
     var poll = setInterval(function () {
       attempts++
       if (getCurrentPatientPid() === target || attempts >= 30) {
         clearInterval(poll)
+        // Let the enc tab and DOM settle after demographics.php runs left_nav.setPatient
         setTimeout(callback, 300)
       }
     }, 200)
-  }
-
-  function clearAllOverlays() {
-    for (var i = injectedElements.length - 1; i >= 0; i--) {
-      var entry = injectedElements[i]
-      if (entry.restoreBg) {
-        entry.element.style.background = entry.element.dataset.originalBg || ""
-        entry.element.style.borderLeft = entry.element.dataset.originalBorderLeft || ""
-        delete entry.element.dataset.originalBg
-        delete entry.element.dataset.originalBorderLeft
-      } else if (entry.restoreDelete) {
-        entry.element.style.background = entry.element.dataset.originalBg || ""
-        entry.element.style.textDecoration = entry.element.dataset.originalTextDecoration || ""
-        entry.element.style.opacity = entry.element.dataset.originalOpacity || ""
-        delete entry.element.dataset.originalBg
-        delete entry.element.dataset.originalTextDecoration
-        delete entry.element.dataset.originalOpacity
-      } else {
-        if (entry.element.parentNode) {
-          entry.element.parentNode.removeChild(entry.element)
-        }
-      }
-    }
-    injectedElements = []
   }
 
   function navigateToTab(tabName, patientID) {
     try {
       var topWin = window.top || window
 
+      // If the tab iframe already exists, just activate it
       var hasTab = false
       try {
         hasTab = !!topWin.document.querySelector("iframe[name='" + tabName + "']")
@@ -440,6 +762,7 @@
         return
       }
 
+      // Tab doesn't exist — load the patient's dashboard to create it
       if (patientID && typeof topWin.navigateTab === "function") {
         var webroot = topWin.webroot_url || ""
         var url = webroot + "/interface/patient_file/summary/demographics.php?set_pid=" + encodeURIComponent(patientID)
@@ -454,20 +777,20 @@
     }
   }
 
-  function applySingleOverlay(item) {
+  function applySingleOverlay(item, isFocused) {
     var mapping = RESOURCE_PAGE_MAP[item.resource_type]
     if (!mapping || !mapping.supportsRowTarget) {
       return { applied: false, reason: "sidebar-only" }
     }
 
     if (item.action === "create") {
-      return applyCreateOverlay(item, mapping)
+      return applyCreateOverlay(item, mapping, isFocused)
     }
     if (item.action === "update") {
-      return applyUpdateOverlay(item, mapping)
+      return applyUpdateOverlay(item, mapping, isFocused)
     }
     if (item.action === "delete") {
-      return applyDeleteOverlay(item, mapping)
+      return applyDeleteOverlay(item, mapping, isFocused)
     }
 
     return { applied: false, reason: "Unknown action: " + item.action }
@@ -476,6 +799,10 @@
   function applyAllOverlays(items, focusIndex, patientID) {
     clearAllOverlays()
 
+    // Only activate the tab for the focused item — activateTabByName hides
+    // other tabs, so navigating to every unique tab causes the last one to win,
+    // not the focused one.  Overlay DOM writes work on iframe documents that
+    // exist regardless of which tab is visible.
     var focusedItem = items[focusIndex]
     if (focusedItem) {
       var focusedMapping = RESOURCE_PAGE_MAP[focusedItem.resource_type]
@@ -486,7 +813,7 @@
 
     var results = []
     for (var i = 0; i < items.length; i++) {
-      var result = applySingleOverlay(items[i])
+      var result = applySingleOverlay(items[i], i === focusIndex)
       results.push({
         itemId: items[i].id,
         applied: result.applied,
@@ -506,13 +833,13 @@
     navigateToTab(mapping.tab)
 
     if (item.action === "create") {
-      return applyCreateOverlay(item, mapping)
+      return applyCreateOverlay(item, mapping, true)
     }
     if (item.action === "update") {
-      return applyUpdateOverlay(item, mapping)
+      return applyUpdateOverlay(item, mapping, true)
     }
     if (item.action === "delete") {
-      return applyDeleteOverlay(item, mapping)
+      return applyDeleteOverlay(item, mapping, true)
     }
 
     return { applied: false, reason: "Unknown action: " + item.action }
@@ -553,6 +880,17 @@
 
     if (event.data.type === "overlay:clear") {
       clearAllOverlays()
+    }
+
+    if (event.data.type === "overlay:accept" ||
+        event.data.type === "overlay:reject" ||
+        event.data.type === "overlay:navigate") {
+      var iframes = document.querySelectorAll("iframe")
+      for (var i = 0; i < iframes.length; i++) {
+        try {
+          iframes[i].contentWindow.postMessage(event.data, "*")
+        } catch (_e) {}
+      }
     }
   })
 

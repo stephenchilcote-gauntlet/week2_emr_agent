@@ -1,120 +1,157 @@
 (function injectClinicalAssistantSidebar() {
-  const SIDEBAR_ID = "openemr-clinical-assistant-sidebar"
-  const MIN_WIDTH = 1024
-  const CONTEXT_POLL_MS = 2000
+    if (window.top !== window.self) {
+        return;
+    }
 
-  if (document.getElementById(SIDEBAR_ID)) {
-    return
-  }
+    // Skip login/logout pages — no session exists, sidebar_frame would redirect top window
+    if (/\/(login|login_screen)\.php/i.test(window.location.pathname)) {
+        return;
+    }
 
-  function getActiveTabInfo() {
-    try {
-      const topWin = window.top || window
-      const tabs = topWin.app_view_model &&
-        topWin.app_view_model.application_data &&
-        topWin.app_view_model.application_data.tabs &&
-        topWin.app_view_model.application_data.tabs.tabsList &&
-        topWin.app_view_model.application_data.tabs.tabsList()
-      if (!tabs || !Array.isArray(tabs)) {
-        return { name: null, title: null, url: null }
-      }
-      for (let i = 0; i < tabs.length; i++) {
-        const tab = tabs[i]
-        if (tab.visible && tab.visible() && !(tab.locked && tab.locked())) {
-          return {
-            name: tab.name ? tab.name() : null,
-            title: tab.title ? tab.title() : null,
-            url: tab.url ? tab.url() : null,
-          }
+    var SIDEBAR_ID = 'openemr-clinical-assistant-sidebar';
+    if (document.getElementById(SIDEBAR_ID)) {
+        return;
+    }
+
+    var SIDEBAR_WIDTH = 380;
+    var moduleRoot = '/interface/modules/custom_modules/oe-module-clinical-assistant/public';
+    var site = new URLSearchParams(window.location.search).get('site') || 'default';
+    var frameSrc = moduleRoot + '/sidebar_frame.php?site=' + encodeURIComponent(site);
+
+    function mount() {
+        if (!document.body) {
+            return;
         }
-      }
-    } catch (_e) {
-      // cross-origin or missing view model
-    }
-    return { name: null, title: null, url: null }
-  }
 
-  function collectContext() {
-    const topWin = window.top || window
+        // --- Restructure DOM: wrap existing body children + sidebar in a flex row ---
+        var outerShell = document.createElement('div');
+        outerShell.id = 'ca-shell';
 
-    let pid = null
-    let encounter = null
-    let patientName = null
+        var contentPane = document.createElement('div');
+        contentPane.id = 'ca-content';
 
-    // Read from OpenEMR's Knockout view model (the real source of truth)
-    try {
-      const appData = topWin.app_view_model &&
-        topWin.app_view_model.application_data
-      if (appData) {
-        const patient = appData.patient && appData.patient()
-        if (patient) {
-          pid = patient.pid ? patient.pid() : null
-          patientName = patient.pname ? patient.pname() : null
-          encounter = patient.selectedEncounterID
-            ? patient.selectedEncounterID()
-            : null
+        // Move every existing body child into the content pane
+        while (document.body.firstChild) {
+            contentPane.appendChild(document.body.firstChild);
         }
-      }
-    } catch (_e) {
-      // view model not available yet
+
+        var sidebar = document.createElement('div');
+        sidebar.id = SIDEBAR_ID;
+
+        var frame = document.createElement('iframe');
+        frame.src = frameSrc;
+        frame.title = 'Clinical Assistant';
+
+        sidebar.appendChild(frame);
+        outerShell.appendChild(contentPane);
+        outerShell.appendChild(sidebar);
+        document.body.appendChild(outerShell);
+
+        // Inject overlay engine into the parent frame for in-page highlights
+        var overlayScript = document.createElement('script');
+        overlayScript.src = moduleRoot + '/assets/overlay.js';
+        document.head.appendChild(overlayScript);
+
+        setupContextBridge(frame);
+
+        // --- Inject layout CSS ---
+        var s = document.createElement('style');
+        s.id = 'clinical-assistant-layout';
+        s.textContent =
+            // Reset body — let the shell fill the viewport
+            'html, body { width: 100% !important; min-width: 0 !important; height: 100% !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; display: block !important; }' +
+            // Flex row: content takes remaining space, sidebar is fixed-width
+            '#ca-shell { display: flex; flex-direction: row; width: 100vw; height: 100vh; overflow: hidden; }' +
+            '#ca-content { flex: 1 1 0%; min-width: 0; height: 100%; overflow: auto; display: flex; flex-direction: column; }' +
+            // Preserve OpenEMR flex layout inside the content pane
+            '#ca-content > #mainBox { flex: 1 1 auto; min-height: 0; width: 100% !important; }' +
+            // Sidebar
+            '#' + SIDEBAR_ID + ' { flex: 0 0 ' + SIDEBAR_WIDTH + 'px; width: ' + SIDEBAR_WIDTH + 'px; height: 100%; border-left: 1px solid #d1d5db; background: #fff; box-shadow: 0 14px 34px rgba(15,23,42,0.12); z-index: 2147480000; }' +
+            '#' + SIDEBAR_ID + ' > iframe { width: 100%; height: 100%; border: 0; }';
+        document.head.appendChild(s);
     }
 
-    const activeTab = getActiveTabInfo()
+    function setupContextBridge(frame) {
+        var pollId = setInterval(function () {
+            if (typeof app_view_model === 'undefined' || !app_view_model.application_data) {
+                return;
+            }
+            clearInterval(pollId);
+            initBridge();
+        }, 250);
 
-    topWin.openemrAgentContext = {
-      pid: pid,
-      encounter: encounter,
-      patient_name: patientName,
-      active_tab: activeTab.name,
-      active_tab_title: activeTab.title,
-      active_tab_url: activeTab.url,
+        function initBridge() {
+            var encSub = null;
+
+            function getActivePageUrl() {
+                try {
+                    var tabs = app_view_model.application_data.tabs.tabsList();
+                    for (var i = 0; i < tabs.length; i++) {
+                        if (tabs[i].visible() && !tabs[i].locked()) {
+                            return tabs[i].url() || '';
+                        }
+                    }
+                } catch (e) { /* tabs not ready */ }
+                return window.location.pathname;
+            }
+
+            function sendContext() {
+                if (!frame.contentWindow) {
+                    return;
+                }
+                var patient = app_view_model.application_data.patient();
+                frame.contentWindow.postMessage({
+                    type: 'clinical-assistant-context',
+                    pid: patient ? String(patient.pid()) : null,
+                    pname: patient ? patient.pname() : null,
+                    encounter_id: patient && patient.selectedEncounterID()
+                        ? String(patient.selectedEncounterID()) : null,
+                    page_url: getActivePageUrl()
+                }, '*');
+            }
+
+            function watchPatient(patient) {
+                if (encSub) { encSub.dispose(); encSub = null; }
+                if (patient && patient.selectedEncounterID) {
+                    encSub = patient.selectedEncounterID.subscribe(function () {
+                        sendContext();
+                    });
+                }
+            }
+
+            function watchTabs() {
+                var tabs = app_view_model.application_data.tabs.tabsList();
+                for (var i = 0; i < tabs.length; i++) {
+                    tabs[i].visible.subscribe(function () { sendContext(); });
+                }
+                app_view_model.application_data.tabs.tabsList.subscribe(function (changes) {
+                    for (var ci = 0; ci < changes.length; ci++) {
+                        if (changes[ci].status === 'added') {
+                            changes[ci].value.visible.subscribe(function () {
+                                sendContext();
+                            });
+                        }
+                    }
+                    sendContext();
+                }, null, 'arrayChange');
+            }
+
+            app_view_model.application_data.patient.subscribe(function (newPatient) {
+                watchPatient(newPatient);
+                sendContext();
+            });
+
+            watchPatient(app_view_model.application_data.patient());
+            watchTabs();
+
+            frame.addEventListener('load', function () { sendContext(); });
+            if (frame.contentWindow) { sendContext(); }
+        }
     }
-  }
 
-  function mount() {
-    if (!document.body) {
-      return
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', mount, { once: true });
+    } else {
+        mount();
     }
-
-    collectContext()
-
-    const wrapper = document.createElement("div")
-    wrapper.id = SIDEBAR_ID
-    wrapper.style.position = "fixed"
-    wrapper.style.top = "0"
-    wrapper.style.right = "0"
-    wrapper.style.width = "380px"
-    wrapper.style.height = "100vh"
-    wrapper.style.zIndex = "2147480000"
-    wrapper.style.borderLeft = "1px solid #d1d5db"
-    wrapper.style.background = "#fff"
-    wrapper.style.boxShadow = "0 14px 34px rgba(15, 23, 42, 0.12)"
-
-    const frame = document.createElement("iframe")
-    frame.src = "/agent-api/ui"
-    frame.title = "Clinical Assistant"
-    frame.style.width = "100%"
-    frame.style.height = "100%"
-    frame.style.border = "0"
-
-    wrapper.appendChild(frame)
-    document.body.appendChild(wrapper)
-
-    var overlayScript = document.createElement("script")
-    overlayScript.src = "/agent-api/ui/assets/overlay.js"
-    document.head.appendChild(overlayScript)
-
-    if (window.innerWidth >= MIN_WIDTH) {
-      document.body.style.marginRight = "380px"
-    }
-
-    // Poll for context changes (tab switches, patient selections)
-    setInterval(collectContext, CONTEXT_POLL_MS)
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mount, { once: true })
-  } else {
-    mount()
-  }
-})()
+})();
