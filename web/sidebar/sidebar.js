@@ -971,7 +971,7 @@ class SidebarApp {
   }
 
   isInPageResource(resourceType) {
-    const supported = ["Condition", "AllergyIntolerance", "MedicationRequest", "Encounter"]
+    const supported = ["Condition", "AllergyIntolerance", "MedicationRequest", "Encounter", "SoapNote"]
     return supported.includes(resourceType)
   }
 
@@ -1000,7 +1000,9 @@ class SidebarApp {
 
   requestAllOverlays(items, focusIndex) {
     const patientID = this.state.manifestOpenemrPid || this.state.patientID
-    this.postOverlayMessage({ type: "overlay:applyAll", items, focusIndex: focusIndex || 0, patientID })
+    const manifest = this.state.pendingManifest
+    const encounterID = (manifest && manifest.encounter_id) || this.state.encounterID || null
+    this.postOverlayMessage({ type: "overlay:applyAll", items, focusIndex: focusIndex || 0, patientID, encounterID })
   }
 
   handleOverlayResult(data) {

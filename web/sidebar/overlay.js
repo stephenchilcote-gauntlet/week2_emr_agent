@@ -27,6 +27,7 @@
   }
 
   var injectedElements = []
+  var currentManifestItems = null
 
   function getFrameDocument(tabName) {
     try {
@@ -272,12 +273,14 @@
   }
 
   function applyCreateOverlay(item, mapping, isFocused) {
+    // SoapNote handles its own frameDoc lookup (may co-locate with encounter ghost)
+    if (item.resource_type === "SoapNote") {
+      return applyCreateOverlaySoap(item, mapping, isFocused)
+    }
+
     var frameDoc = getFrameDocumentForMapping(mapping)
     if (!frameDoc) return { applied: false, reason: "Frame not available" }
 
-    if (item.resource_type === "SoapNote") {
-      return applyCreateOverlaySoap(frameDoc, item, isFocused)
-    }
     if (item.resource_type === "Encounter") {
       return applyCreateOverlayEncounter(frameDoc, item, isFocused)
     }
@@ -296,6 +299,7 @@
     // Build a ghost row that matches the real EMR row structure
     var ghost = frameDoc.createElement("div")
     ghost.className = "list-group-item p-1 agent-overlay-ghost"
+    ghost.dataset.itemId = item.id
     if (item.status === "rejected") {
       ghost.style.cssText = "background:#f9fafb;border-left:3px solid #d1d5db;opacity:0.5;"
     } else if (item.status === "approved") {
@@ -477,6 +481,7 @@
   function buildFormHolderGhost(frameDoc, item, isFocused, title, fields) {
     var ghost = frameDoc.createElement("div")
     ghost.className = "form-holder agent-overlay-ghost"
+    ghost.dataset.itemId = item.id
     if (item.status === "rejected") {
       ghost.style.cssText = "background:#f9fafb;border-left:3px solid #d1d5db;opacity:0.5;"
     } else if (item.status === "approved") {
@@ -544,7 +549,109 @@
     return ghost
   }
 
-  function applyCreateOverlaySoap(frameDoc, item, isFocused) {
+  function findPendingEncounterDependency(item) {
+    if (!item.depends_on || !item.depends_on.length || !currentManifestItems) return null
+    for (var i = 0; i < item.depends_on.length; i++) {
+      for (var j = 0; j < currentManifestItems.length; j++) {
+        if (currentManifestItems[j].id === item.depends_on[i] &&
+            currentManifestItems[j].resource_type === "Encounter" &&
+            currentManifestItems[j].action === "create") {
+          return currentManifestItems[j]
+        }
+      }
+    }
+    return null
+  }
+
+  function findGhostByItemId(itemId) {
+    var frameNames = ["pat", "enc"]
+    for (var f = 0; f < frameNames.length; f++) {
+      var fd = getFrameDocument(frameNames[f])
+      if (!fd) continue
+      var ghost = fd.querySelector('.agent-overlay-ghost[data-item-id="' + itemId + '"]')
+      if (ghost) return { element: ghost, frameDoc: fd }
+    }
+    return null
+  }
+
+  function buildCompactSoapGhost(doc, item, isFocused) {
+    var pv = item.proposed_value || {}
+    var wrapper = doc.createElement("div")
+    wrapper.className = "agent-overlay-ghost agent-overlay-nested-soap"
+    wrapper.dataset.itemId = item.id
+    wrapper.style.cssText =
+      "margin:8px 4px;padding:8px;background:#f0fdfa;border-left:2px solid #0d9488;" +
+      "border-radius:4px;font-size:12px;"
+    if (item.status === "rejected") {
+      wrapper.style.background = "#f9fafb"
+      wrapper.style.borderLeftColor = "#d1d5db"
+      wrapper.style.opacity = "0.5"
+    } else if (item.status === "approved") {
+      wrapper.style.background = "#f0fdf4"
+      wrapper.style.borderLeftColor = "#15803d"
+    }
+    if (isFocused) applyFocusStyle(wrapper)
+
+    var headerRow = doc.createElement("div")
+    headerRow.style.cssText = "display:flex;align-items:center;margin-bottom:4px;"
+
+    var titleEl = doc.createElement("div")
+    titleEl.style.cssText = "flex:1 1 auto;font-weight:600;color:#0f766e;"
+    titleEl.textContent = "SOAP Note (Proposed)"
+    var statusBadge = createStatusBadge(doc, item.status)
+    if (statusBadge) titleEl.appendChild(statusBadge)
+    var confBadge = createConfidenceBadge(doc, item.confidence, item.status)
+    if (confBadge) titleEl.appendChild(confBadge)
+    headerRow.appendChild(titleEl)
+    headerRow.appendChild(createActionButtons(doc, item, isFocused))
+    wrapper.appendChild(headerRow)
+
+    var fields = [
+      { label: "S", value: pv.subjective },
+      { label: "O", value: pv.objective },
+      { label: "A", value: pv.assessment },
+      { label: "P", value: pv.plan },
+    ]
+    var table = doc.createElement("table")
+    table.style.cssText = "width:100%;border-collapse:collapse;"
+    for (var i = 0; i < fields.length; i++) {
+      if (!fields[i].value) continue
+      var tr = doc.createElement("tr")
+      var tdLabel = doc.createElement("td")
+      tdLabel.style.cssText =
+        "font-weight:600;vertical-align:top;padding:1px 4px 1px 0;width:1%;white-space:nowrap;color:#374151;"
+      tdLabel.textContent = fields[i].label + ":"
+      var tdValue = doc.createElement("td")
+      tdValue.style.cssText = "padding:1px 0;color:#4b5563;"
+      var val = fields[i].value
+      tdValue.textContent = val.length > 120 ? val.substring(0, 120) + "\u2026" : val
+      tr.appendChild(tdLabel)
+      tr.appendChild(tdValue)
+      table.appendChild(tr)
+    }
+    wrapper.appendChild(table)
+    return wrapper
+  }
+
+  function applyCreateOverlaySoap(item, mapping, isFocused) {
+    // Part 2: Co-locate with pending Encounter ghost if depends_on references one
+    var pendingEnc = findPendingEncounterDependency(item)
+    if (pendingEnc) {
+      var ghostMatch = findGhostByItemId(pendingEnc.id)
+      if (ghostMatch) {
+        var compact = buildCompactSoapGhost(ghostMatch.frameDoc, item, isFocused)
+        ghostMatch.element.appendChild(compact)
+        injectedElements.push({ element: compact, frameDoc: ghostMatch.frameDoc })
+        if (isFocused) scrollIntoView(compact)
+        return { applied: true }
+      }
+      return { applied: false, reason: "Will be created inside the new encounter" }
+    }
+
+    // Part 1: Normal path — encounter should already be loaded
+    var frameDoc = getFrameDocumentForMapping(mapping)
+    if (!frameDoc) return { applied: false, reason: "Frame not available" }
+
     var container = frameDoc.querySelector("#partable")
     if (!container) return { applied: false, reason: "Container #partable not found" }
 
@@ -803,6 +910,65 @@
     }, 200)
   }
 
+  function needsEncounterLoading(items, encounterID) {
+    if (!encounterID) return false
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].resource_type !== "SoapNote") continue
+      if (items[i].action !== "create") continue
+      // If it depends on a pending Encounter create, it won't use the enc tab
+      var hasPendingDep = false
+      if (items[i].depends_on && items[i].depends_on.length) {
+        for (var d = 0; d < items[i].depends_on.length; d++) {
+          for (var j = 0; j < items.length; j++) {
+            if (items[j].id === items[i].depends_on[d] &&
+                items[j].resource_type === "Encounter" &&
+                items[j].action === "create") {
+              hasPendingDep = true
+              break
+            }
+          }
+          if (hasPendingDep) break
+        }
+      }
+      if (!hasPendingDep) return true
+    }
+    return false
+  }
+
+  function ensureEncounterLoaded(encounterID, callback) {
+    if (!encounterID) { callback(); return }
+
+    var topWin = window.top || window
+    if (typeof topWin.navigateTab !== "function") { callback(); return }
+
+    // Check if enc-forms already has #partable loaded
+    var mapping = RESOURCE_PAGE_MAP.SoapNote
+    var frameDoc = getFrameDocumentForMapping(mapping)
+    if (frameDoc && frameDoc.querySelector("#partable")) {
+      callback()
+      return
+    }
+
+    var webroot = topWin.webroot_url || ""
+    var url = webroot + "/interface/patient_file/encounter/encounter_top.php?set_encounter=" + encodeURIComponent(encounterID)
+
+    topWin.navigateTab(url, "enc", function () {
+      if (typeof topWin.activateTabByName === "function") {
+        topWin.activateTabByName("enc", true)
+      }
+    })
+
+    var attempts = 0
+    var poll = setInterval(function () {
+      attempts++
+      var fd = getFrameDocumentForMapping(mapping)
+      if ((fd && fd.querySelector("#partable")) || attempts >= 15) {
+        clearInterval(poll)
+        setTimeout(callback, 200)
+      }
+    }, 200)
+  }
+
   function navigateToTab(tabName, patientID) {
     try {
       var topWin = window.top || window
@@ -871,6 +1037,17 @@
 
   function applyAllOverlays(items, focusIndex, patientID, callback) {
     clearAllOverlays()
+    currentManifestItems = items
+
+    // Determine focused item by ID so reordering doesn't break focus tracking
+    var focusedItemId = items[focusIndex] ? items[focusIndex].id : null
+
+    // Reorder: items without depends_on first so ghosts exist before dependents look for them
+    var ordered = items.slice().sort(function (a, b) {
+      var aDeps = (a.depends_on && a.depends_on.length) || 0
+      var bDeps = (b.depends_on && b.depends_on.length) || 0
+      return aDeps - bDeps
+    })
 
     // Only activate the tab for the focused item — activateTabByName hides
     // other tabs, so navigating to every unique tab causes the last one to win,
@@ -881,14 +1058,16 @@
 
     function doApply() {
       var results = []
-      for (var i = 0; i < items.length; i++) {
-        var result = applySingleOverlay(items[i], i === focusIndex)
+      for (var i = 0; i < ordered.length; i++) {
+        var isFocused = ordered[i].id === focusedItemId
+        var result = applySingleOverlay(ordered[i], isFocused)
         results.push({
-          itemId: items[i].id,
+          itemId: ordered[i].id,
           applied: result.applied,
           reason: result.reason || null,
         })
       }
+      currentManifestItems = null
       if (callback) callback(results)
       return results
     }
@@ -973,17 +1152,26 @@
       var items = event.data.items || []
       var focusIndex = event.data.focusIndex || 0
       var patientID = event.data.patientID || null
+      var encounterID = event.data.encounterID || null
       var source = event.source
 
       ensurePatientLoaded(patientID, function () {
-        applyAllOverlays(items, focusIndex, patientID, function (results) {
-          if (source) {
-            source.postMessage({
-              type: "overlay:allResults",
-              results: results,
-            }, "*")
-          }
-        })
+        var loadEnc = needsEncounterLoading(items, encounterID)
+        var afterEnc = function () {
+          applyAllOverlays(items, focusIndex, patientID, function (results) {
+            if (source) {
+              source.postMessage({
+                type: "overlay:allResults",
+                results: results,
+              }, "*")
+            }
+          })
+        }
+        if (loadEnc) {
+          ensureEncounterLoaded(encounterID, afterEnc)
+        } else {
+          afterEnc()
+        }
       })
     }
 
@@ -1010,6 +1198,7 @@
     navigateToTab: navigateToTab,
     navigateTabToUrl: navigateTabToUrl,
     ensurePatientLoaded: ensurePatientLoaded,
+    ensureEncounterLoaded: ensureEncounterLoaded,
     getCurrentPatientPid: getCurrentPatientPid,
     RESOURCE_PAGE_MAP: RESOURCE_PAGE_MAP,
   }
