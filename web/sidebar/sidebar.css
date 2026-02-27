@@ -735,11 +735,6 @@ body {
   color: var(--warning);
 }
 
-.confidence-badge.confidence-high {
-  background: #D1FAE5;
-  color: #065F46;
-}
-
 .confidence-badge.confidence-low {
   background: #fee2e2;
   color: var(--error);
