@@ -18,7 +18,7 @@
       rowSelector: ".list-group-item",
       supportsRowTarget: true,
     },
-    Encounter: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
+    Encounter: { tab: "enc", container: ".table.jumbotron", navigateUrl: "/interface/patient_file/history/encounters.php", supportsRowTarget: true },
     Observation: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
     Vital: { tab: "pat", container: "#vitals_ps_expand", supportsRowTarget: true },
     SoapNote: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
@@ -563,17 +563,75 @@
   }
 
   function applyCreateOverlayEncounter(frameDoc, item, isFocused) {
-    var container = frameDoc.querySelector("#partable")
-    if (!container) return { applied: false, reason: "Container #partable not found" }
+    var table = frameDoc.querySelector(".table.jumbotron")
+    if (!table) return { applied: false, reason: "Encounters table not found" }
 
+    var tbody = table.querySelector("tbody") || table
     var pv = item.proposed_value || {}
-    var ghost = buildFormHolderGhost(frameDoc, item, isFocused, "Visit Summary", [
-      { label: "Reason", value: pv.reason || item.description },
-      { label: "Date", value: pv.date },
-      { label: "Facility", value: pv.facility },
-    ])
 
-    container.insertBefore(ghost, container.firstChild)
+    var ghost = frameDoc.createElement("tr")
+    ghost.className = "encrow text agent-overlay-ghost"
+    if (item.status === "rejected") {
+      ghost.style.cssText = "background:#f9fafb;border-left:3px solid #d1d5db;opacity:0.5;"
+    } else if (item.status === "approved") {
+      ghost.style.cssText = "background:#f0fdf4;border-left:3px solid #15803d;opacity:0.85;"
+    } else {
+      ghost.style.cssText = "background:#ECFDF5;border-left:3px solid #10b981;opacity:0.85;"
+    }
+    if (isFocused) applyFocusStyle(ghost)
+
+    // Count columns from thead to match table width
+    var colCount = 6
+    var theadRow = table.querySelector("thead tr")
+    if (theadRow) colCount = theadRow.children.length
+
+    // Date column
+    var dateTd = frameDoc.createElement("td")
+    dateTd.className = "align-top"
+    dateTd.textContent = pv.date || "Pending"
+    ghost.appendChild(dateTd)
+
+    // Reason column — spans remaining columns to hold action buttons
+    var reasonTd = frameDoc.createElement("td")
+    reasonTd.setAttribute("colspan", String(Math.max(1, colCount - 1)))
+
+    var contentWrapper = frameDoc.createElement("div")
+    contentWrapper.style.cssText = "display:flex;align-items:center;width:100%;"
+
+    var fill = frameDoc.createElement("div")
+    fill.style.cssText = "flex:1 1 auto;min-width:0;"
+
+    var titleEl = frameDoc.createElement("span")
+    titleEl.className = "font-weight-bold"
+    titleEl.textContent = pv.reason || item.description || "New Encounter"
+    fill.appendChild(titleEl)
+
+    if (pv.facility) {
+      var facilitySpan = frameDoc.createElement("span")
+      facilitySpan.style.cssText = "margin-left:8px;color:#6b7280;font-size:12px;"
+      facilitySpan.textContent = "@ " + pv.facility
+      fill.appendChild(facilitySpan)
+    }
+
+    var statusBadge = createStatusBadge(frameDoc, item.status)
+    if (statusBadge) {
+      fill.appendChild(statusBadge)
+    } else {
+      var pendingSpan = frameDoc.createElement("span")
+      pendingSpan.textContent = " (Proposed)"
+      pendingSpan.style.cssText = "font-style:italic;color:#6b7280;margin-left:6px;"
+      fill.appendChild(pendingSpan)
+    }
+
+    var confBadge = createConfidenceBadge(frameDoc, item.confidence, item.status)
+    if (confBadge) fill.appendChild(confBadge)
+
+    contentWrapper.appendChild(fill)
+    contentWrapper.appendChild(createActionButtons(frameDoc, item, isFocused))
+    reasonTd.appendChild(contentWrapper)
+    ghost.appendChild(reasonTd)
+
+    tbody.insertBefore(ghost, tbody.firstChild)
     injectedElements.push({ element: ghost, frameDoc: frameDoc })
     if (isFocused) scrollIntoView(ghost)
     return { applied: true }
@@ -777,6 +835,21 @@
     }
   }
 
+  function navigateTabToUrl(tabName, url) {
+    try {
+      var topWin = window.top || window
+      if (typeof topWin.navigateTab !== "function") return
+      var webroot = topWin.webroot_url || ""
+      topWin.navigateTab(webroot + url, tabName, function () {
+        if (typeof topWin.activateTabByName === "function") {
+          topWin.activateTabByName(tabName, true)
+        }
+      })
+    } catch (_e) {
+      // cross-origin or function not available
+    }
+  }
+
   function applySingleOverlay(item, isFocused) {
     var mapping = RESOURCE_PAGE_MAP[item.resource_type]
     if (!mapping || !mapping.supportsRowTarget) {
@@ -796,7 +869,7 @@
     return { applied: false, reason: "Unknown action: " + item.action }
   }
 
-  function applyAllOverlays(items, focusIndex, patientID) {
+  function applyAllOverlays(items, focusIndex, patientID, callback) {
     clearAllOverlays()
 
     // Only activate the tab for the focused item — activateTabByName hides
@@ -804,45 +877,79 @@
     // not the focused one.  Overlay DOM writes work on iframe documents that
     // exist regardless of which tab is visible.
     var focusedItem = items[focusIndex]
-    if (focusedItem) {
-      var focusedMapping = RESOURCE_PAGE_MAP[focusedItem.resource_type]
+    var focusedMapping = focusedItem ? RESOURCE_PAGE_MAP[focusedItem.resource_type] : null
+
+    function doApply() {
+      var results = []
+      for (var i = 0; i < items.length; i++) {
+        var result = applySingleOverlay(items[i], i === focusIndex)
+        results.push({
+          itemId: items[i].id,
+          applied: result.applied,
+          reason: result.reason || null,
+        })
+      }
+      if (callback) callback(results)
+      return results
+    }
+
+    if (focusedMapping && focusedMapping.navigateUrl) {
+      navigateTabToUrl(focusedMapping.tab, focusedMapping.navigateUrl)
+      // Poll until the target container appears in the loaded page
+      var attempts = 0
+      var poll = setInterval(function () {
+        attempts++
+        var frameDoc = getFrameDocument(focusedMapping.tab)
+        var found = frameDoc && frameDoc.querySelector(focusedMapping.container)
+        if (found || attempts >= 15) {
+          clearInterval(poll)
+          doApply()
+        }
+      }, 200)
+    } else {
       if (focusedMapping && focusedMapping.tab) {
         navigateToTab(focusedMapping.tab, patientID)
       }
+      return doApply()
     }
-
-    var results = []
-    for (var i = 0; i < items.length; i++) {
-      var result = applySingleOverlay(items[i], i === focusIndex)
-      results.push({
-        itemId: items[i].id,
-        applied: result.applied,
-        reason: result.reason || null,
-      })
-    }
-    return results
   }
 
-  function applyOverlay(item) {
+  function applyOverlay(item, callback) {
     var mapping = RESOURCE_PAGE_MAP[item.resource_type]
     if (!mapping || !mapping.supportsRowTarget) {
-      return { applied: false, reason: "sidebar-only" }
+      var r = { applied: false, reason: "sidebar-only" }
+      if (callback) callback(r)
+      return r
     }
 
     clearAllOverlays()
-    navigateToTab(mapping.tab)
 
-    if (item.action === "create") {
-      return applyCreateOverlay(item, mapping, true)
-    }
-    if (item.action === "update") {
-      return applyUpdateOverlay(item, mapping, true)
-    }
-    if (item.action === "delete") {
-      return applyDeleteOverlay(item, mapping, true)
+    function doApply() {
+      var result
+      if (item.action === "create") result = applyCreateOverlay(item, mapping, true)
+      else if (item.action === "update") result = applyUpdateOverlay(item, mapping, true)
+      else if (item.action === "delete") result = applyDeleteOverlay(item, mapping, true)
+      else result = { applied: false, reason: "Unknown action: " + item.action }
+      if (callback) callback(result)
+      return result
     }
 
-    return { applied: false, reason: "Unknown action: " + item.action }
+    if (mapping.navigateUrl) {
+      navigateTabToUrl(mapping.tab, mapping.navigateUrl)
+      var attempts = 0
+      var poll = setInterval(function () {
+        attempts++
+        var frameDoc = getFrameDocument(mapping.tab)
+        var found = frameDoc && frameDoc.querySelector(mapping.container)
+        if (found || attempts >= 15) {
+          clearInterval(poll)
+          doApply()
+        }
+      }, 200)
+    } else {
+      navigateToTab(mapping.tab)
+      return doApply()
+    }
   }
 
   window.addEventListener("message", function (event) {
@@ -850,15 +957,16 @@
     if (!event.data.type.startsWith("overlay:")) return
 
     if (event.data.type === "overlay:apply") {
-      var result = applyOverlay(event.data.item)
-      if (event.source) {
-        event.source.postMessage({
-          type: "overlay:result",
-          itemId: event.data.item.id,
-          applied: result.applied,
-          reason: result.reason || null,
-        }, "*")
-      }
+      applyOverlay(event.data.item, function (result) {
+        if (event.source) {
+          event.source.postMessage({
+            type: "overlay:result",
+            itemId: event.data.item.id,
+            applied: result.applied,
+            reason: result.reason || null,
+          }, "*")
+        }
+      })
     }
 
     if (event.data.type === "overlay:applyAll") {
@@ -868,13 +976,14 @@
       var source = event.source
 
       ensurePatientLoaded(patientID, function () {
-        var results = applyAllOverlays(items, focusIndex, patientID)
-        if (source) {
-          source.postMessage({
-            type: "overlay:allResults",
-            results: results,
-          }, "*")
-        }
+        applyAllOverlays(items, focusIndex, patientID, function (results) {
+          if (source) {
+            source.postMessage({
+              type: "overlay:allResults",
+              results: results,
+            }, "*")
+          }
+        })
       })
     }
 
@@ -899,6 +1008,7 @@
     applyAllOverlays: applyAllOverlays,
     clearAllOverlays: clearAllOverlays,
     navigateToTab: navigateToTab,
+    navigateTabToUrl: navigateTabToUrl,
     ensurePatientLoaded: ensurePatientLoaded,
     getCurrentPatientPid: getCurrentPatientPid,
     RESOURCE_PAGE_MAP: RESOURCE_PAGE_MAP,
