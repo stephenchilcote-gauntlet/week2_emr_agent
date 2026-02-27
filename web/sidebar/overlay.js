@@ -22,6 +22,8 @@
     Observation: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
     Procedure: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
     DiagnosticReport: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
+    Vital: { tab: "pat", container: "#vitals_ps_expand", rowSelector: null, supportsRowTarget: false },
+    SoapNote: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
   }
 
   var injectedElements = []
@@ -343,10 +345,59 @@
 
   function scrollIntoView(el) {
     try {
-      el.scrollIntoView({ behavior: "smooth", block: "center" })
+      var win = (el.ownerDocument && el.ownerDocument.defaultView) || window
+      ;(win.requestAnimationFrame || setTimeout)(function () {
+        try {
+          el.scrollIntoView({ behavior: "smooth", block: "center" })
+        } catch (_e) {}
+      })
     } catch (_e) {
       // ignore
     }
+  }
+
+  function getCurrentPatientPid() {
+    try {
+      var topWin = window.top || window
+      var appData = topWin.app_view_model && topWin.app_view_model.application_data
+      if (!appData) return null
+      var patient = typeof appData.patient === "function" ? appData.patient() : null
+      if (!patient) return null
+      var pid = typeof patient.pid === "function" ? patient.pid() : null
+      if (pid == null || pid === "") return null
+      return String(pid)
+    } catch (_e) {
+      return null
+    }
+  }
+
+  function ensurePatientLoaded(patientID, callback) {
+    if (!patientID) { callback(); return }
+
+    var target = String(patientID)
+    var currentPid = getCurrentPatientPid()
+    if (currentPid === target) { callback(); return }
+
+    var topWin = window.top || window
+    if (typeof topWin.navigateTab !== "function") { callback(); return }
+
+    var webroot = topWin.webroot_url || ""
+    var url = webroot + "/interface/patient_file/summary/demographics.php?set_pid=" + encodeURIComponent(patientID)
+
+    topWin.navigateTab(url, "pat", function () {
+      if (typeof topWin.activateTabByName === "function") {
+        topWin.activateTabByName("pat", true)
+      }
+    })
+
+    var attempts = 0
+    var poll = setInterval(function () {
+      attempts++
+      if (getCurrentPatientPid() === target || attempts >= 30) {
+        clearInterval(poll)
+        setTimeout(callback, 300)
+      }
+    }, 200)
   }
 
   function clearAllOverlays() {
@@ -373,11 +424,30 @@
     injectedElements = []
   }
 
-  function navigateToTab(tabName) {
+  function navigateToTab(tabName, patientID) {
     try {
       var topWin = window.top || window
-      if (typeof topWin.activateTabByName === "function") {
-        topWin.activateTabByName(tabName, true)
+
+      var hasTab = false
+      try {
+        hasTab = !!topWin.document.querySelector("iframe[name='" + tabName + "']")
+      } catch (_e) {}
+
+      if (hasTab) {
+        if (typeof topWin.activateTabByName === "function") {
+          topWin.activateTabByName(tabName, true)
+        }
+        return
+      }
+
+      if (patientID && typeof topWin.navigateTab === "function") {
+        var webroot = topWin.webroot_url || ""
+        var url = webroot + "/interface/patient_file/summary/demographics.php?set_pid=" + encodeURIComponent(patientID)
+        topWin.navigateTab(url, "pat", function () {
+          if (typeof topWin.activateTabByName === "function") {
+            topWin.activateTabByName("pat", true)
+          }
+        })
       }
     } catch (_e) {
       // cross-origin or function not available
@@ -403,21 +473,22 @@
     return { applied: false, reason: "Unknown action: " + item.action }
   }
 
-  function applyAllOverlays(items) {
+  function applyAllOverlays(items, focusIndex, patientID) {
     clearAllOverlays()
 
-    var navigated = {}
+    var focusedItem = items[focusIndex]
+    if (focusedItem) {
+      var focusedMapping = RESOURCE_PAGE_MAP[focusedItem.resource_type]
+      if (focusedMapping && focusedMapping.tab) {
+        navigateToTab(focusedMapping.tab, patientID)
+      }
+    }
+
     var results = []
     for (var i = 0; i < items.length; i++) {
-      var item = items[i]
-      var mapping = RESOURCE_PAGE_MAP[item.resource_type]
-      if (mapping && mapping.supportsRowTarget && !navigated[mapping.tab]) {
-        navigateToTab(mapping.tab)
-        navigated[mapping.tab] = true
-      }
-      var result = applySingleOverlay(item)
+      var result = applySingleOverlay(items[i])
       results.push({
-        itemId: item.id,
+        itemId: items[i].id,
         applied: result.applied,
         reason: result.reason || null,
       })
@@ -464,13 +535,20 @@
     }
 
     if (event.data.type === "overlay:applyAll") {
-      var results = applyAllOverlays(event.data.items || [])
-      if (event.source) {
-        event.source.postMessage({
-          type: "overlay:allResults",
-          results: results,
-        }, "*")
-      }
+      var items = event.data.items || []
+      var focusIndex = event.data.focusIndex || 0
+      var patientID = event.data.patientID || null
+      var source = event.source
+
+      ensurePatientLoaded(patientID, function () {
+        var results = applyAllOverlays(items, focusIndex, patientID)
+        if (source) {
+          source.postMessage({
+            type: "overlay:allResults",
+            results: results,
+          }, "*")
+        }
+      })
     }
 
     if (event.data.type === "overlay:clear") {
@@ -483,6 +561,8 @@
     applyAllOverlays: applyAllOverlays,
     clearAllOverlays: clearAllOverlays,
     navigateToTab: navigateToTab,
+    ensurePatientLoaded: ensurePatientLoaded,
+    getCurrentPatientPid: getCurrentPatientPid,
     RESOURCE_PAGE_MAP: RESOURCE_PAGE_MAP,
   }
 })()
