@@ -2,8 +2,13 @@
 # deploy.sh — Deploy or update the EMR agent on a Hetzner VPS.
 #
 # Usage:
-#   ./scripts/deploy.sh <server-ip>              # normal deploy (preserves DB)
+#   ./scripts/deploy.sh <server-ip>              # agent-only deploy (~1 min)
+#   ./scripts/deploy.sh <server-ip> --all         # rebuild everything incl. OpenEMR
 #   ./scripts/deploy.sh <server-ip> --fresh       # wipe volumes and re-register OAuth
+#
+# The default (no flag) deploys only the agent service — it skips syncing the
+# 2.1GB openemr/ directory and doesn't restart OpenEMR.  Use --all when you've
+# changed sidebar files, Dockerfile.openemr, or start.sh.
 #
 # After a --fresh deploy, the script automatically:
 #   1. Waits for OpenEMR to boot
@@ -13,16 +18,24 @@
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-  echo "Usage: $0 <server-ip> [--fresh]"
+  echo "Usage: $0 <server-ip> [--all|--fresh]"
   exit 1
 fi
 
-SERVER="root@$1"
+# Strip protocol prefix and trailing slashes so users can pass a URL or bare host
+HOST="${1#https://}"
+HOST="${HOST#http://}"
+HOST="${HOST%/}"
+SERVER="root@$HOST"
 REMOTE_DIR="/opt/emr-agent"
 DOMAIN="emragent.404.mn"
 FRESH=false
+DEPLOY_ALL=false
 if [ "${2:-}" = "--fresh" ]; then
   FRESH=true
+  DEPLOY_ALL=true
+elif [ "${2:-}" = "--all" ]; then
+  DEPLOY_ALL=true
 fi
 
 if [ "$FRESH" = true ]; then
@@ -43,33 +56,98 @@ if [ "$FRESH" = true ]; then
   fi
 fi
 
-echo "=== Syncing project files to $SERVER:$REMOTE_DIR ==="
+# ---------------------------------------------------------------------------
+# Pre-deploy: reject hardcoded Docker bridge IPs / non-localhost URLs in
+# deployed source files.  Catches accidental 172.x.x.x or 192.168.x.x IPs
+# that coding agents sometimes introduce.
+# ---------------------------------------------------------------------------
+echo "=== Pre-deploy: checking for hardcoded URLs ==="
+BAD_PATTERNS='(https?://172\.[0-9]+\.[0-9]+\.[0-9]+|https?://192\.168\.[0-9]+\.[0-9]+|https?://10\.[0-9]+\.[0-9]+\.[0-9]+)'
+# Only scan files that end up inside containers (src/, web/, openemr module PHP)
+BAD_FILES=$(grep -rEn "$BAD_PATTERNS" \
+  --include='*.py' --include='*.php' --include='*.js' --include='*.css' --include='*.html' \
+  src/ web/ openemr/interface/modules/custom_modules/ 2>/dev/null || true)
+
+if [ -n "$BAD_FILES" ]; then
+  echo ""
+  echo "ERROR: Found hardcoded private-network URLs in deployed source files:"
+  echo "$BAD_FILES"
+  echo ""
+  echo "These break in Docker where services communicate via DNS names (e.g. http://agent:8000)."
+  echo "Fix the offending file(s) and re-run."
+  exit 1
+fi
+echo "No hardcoded private-network URLs found. OK."
+
+RSYNC_EXCLUDES=(
+  --exclude '.venv'
+  --exclude '__pycache__'
+  --exclude '.pytest_cache'
+  --exclude '.hypothesis'
+  --exclude '.mypy_cache'
+  --exclude '.ruff_cache'
+  --exclude 'data'
+  --exclude 'tests'
+  --exclude '.mutmut-cache'
+  --exclude '*.pyc'
+  --exclude 'htmlcov'
+  --exclude '.coverage'
+  --exclude '.git'
+)
+
+if [ "$DEPLOY_ALL" = true ]; then
+  # Full sync includes openemr/ (2.1 GB) — only needed for sidebar/OpenEMR changes
+  RSYNC_EXCLUDES+=(
+    --exclude 'openemr/.git'
+    --exclude 'openemr/tests'
+    --exclude 'openemr/.github'
+    --exclude 'openemr/ci'
+    --exclude 'openemr/Documentation'
+    --exclude 'openemr/.phpstan'
+  )
+  SERVICES=""  # all services
+  echo "=== Full sync (including openemr/) to $SERVER:$REMOTE_DIR ==="
+else
+  # Agent-only: skip the 2.1 GB openemr/ directory entirely
+  RSYNC_EXCLUDES+=(--exclude 'openemr/')
+  SERVICES="agent"
+  echo "=== Agent-only sync (skipping openemr/) to $SERVER:$REMOTE_DIR ==="
+fi
+
 rsync -avz --delete \
-  --exclude '.venv' \
-  --exclude '__pycache__' \
-  --exclude '.pytest_cache' \
-  --exclude '.hypothesis' \
-  --exclude '.mypy_cache' \
-  --exclude '.ruff_cache' \
-  --exclude 'data' \
-  --exclude 'tests' \
-  --exclude '.mutmut-cache' \
-  --exclude '*.pyc' \
-  --exclude 'htmlcov' \
-  --exclude '.coverage' \
-  --exclude 'openemr/.git' \
-  --exclude 'openemr/tests' \
-  --exclude 'openemr/.github' \
-  --exclude 'openemr/ci' \
-  --exclude 'openemr/Documentation' \
-  --exclude 'openemr/.phpstan' \
+  "${RSYNC_EXCLUDES[@]}" \
   ./ "$SERVER:$REMOTE_DIR/"
 
 echo "=== Copying .env.prod to server ==="
 scp .env.prod "$SERVER:$REMOTE_DIR/.env"
 
-echo "=== Building and starting services ==="
-ssh -o StrictHostKeyChecking=no "$SERVER" "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml --env-file .env up -d --build"
+if [ -n "$SERVICES" ]; then
+  echo "=== Building and restarting: $SERVICES ==="
+  ssh -o StrictHostKeyChecking=no "$SERVER" "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml --env-file .env up -d --build $SERVICES"
+else
+  echo "=== Building and starting all services ==="
+  ssh -o StrictHostKeyChecking=no "$SERVER" "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml --env-file .env up -d --build"
+
+  echo "=== Waiting for OpenEMR to be healthy ==="
+  MAX_ATTEMPTS=60
+  ATTEMPT=0
+  while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+    if ssh -o StrictHostKeyChecking=no "$SERVER" "timeout 2 bash -c 'cat < /dev/null > /dev/tcp/localhost/80' 2>/dev/null"; then
+      echo "OpenEMR is up on port 80."
+      break
+    fi
+    ATTEMPT=$((ATTEMPT + 1))
+    if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+      echo "Waiting for OpenEMR to accept connections... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+      sleep 2
+    fi
+  done
+
+  if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+    echo "ERROR: OpenEMR did not come up after 2 minutes. Check logs with: ssh $SERVER 'cd $REMOTE_DIR && docker compose logs'"
+    exit 1
+  fi
+fi
 
 if [ "$FRESH" = true ]; then
   echo ""
@@ -79,7 +157,7 @@ if [ "$FRESH" = true ]; then
   # shellcheck disable=SC1091
   source .env.prod
   set +a
-  ./scripts/register-oauth.sh "$1"
+  ./scripts/register-oauth.sh "$HOST"
 
   echo ""
   echo "=== Saving OAuth credentials back to local .env.prod ==="
@@ -90,6 +168,6 @@ fi
 
 echo ""
 echo "=== Deploy complete ==="
-echo "OpenEMR:  https://$1"
+echo "OpenEMR:  https://$HOST"
 echo "Agent:    Not publicly exposed (use: ssh -L 8000:localhost:8000 $SERVER)"
 echo "Jaeger:   Not publicly exposed (use: ssh -L 16686:localhost:16686 $SERVER)"

@@ -5,8 +5,11 @@
 ## Quick Reference
 
 ```bash
-# Normal deploy (code changes only, preserves DB and OAuth):
+# Agent-only deploy (skips 2.1GB openemr/ sync + OpenEMR restart, ~1 min):
 ./scripts/deploy.sh 77.42.17.207
+
+# Full deploy (syncs everything, rebuilds all containers):
+./scripts/deploy.sh 77.42.17.207 --all
 
 # Full wipe and rebuild (new DB, new OAuth client):
 ./scripts/deploy.sh 77.42.17.207 --fresh
