@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
-import os
 import re
 from collections import Counter
 
@@ -127,7 +126,7 @@ def _send_eval_message(
 
 def _run_judge_checks(
     case_id: str, response_text: str, judge_checks: list[dict],
-) -> dict[str, bool]:
+) -> dict[str, bool | None]:
     """Run LLM judge checks and return results keyed by check type.
 
     Runs async judge calls in a separate thread to avoid conflicting with
@@ -201,10 +200,17 @@ def _run_judge_checks(
             while f"{key}_{suffix}" in results:
                 suffix += 1
             key = f"{key}_{suffix}"
-        results[key] = judge_result.passed
-        reasoning = judge_result.reasoning
-        print(f"    Judge [{label}] {'✓' if judge_result.passed else '✗'} "
-              f"(confidence={judge_result.confidence:.2f}): {reasoning}")
+        # When confidence=0.0 the judge API failed — record as None
+        # (skip) so the caller can distinguish API errors from real
+        # pass/fail results.  Never silently drop the check.
+        if judge_result.confidence == 0.0 and "judge error" in judge_result.reasoning.lower():
+            results[key] = None  # explicit skip — not pass, not fail
+            print(f"    Judge [{label}] SKIPPED (API error): {judge_result.reasoning}")
+        else:
+            results[key] = judge_result.passed
+            reasoning = judge_result.reasoning
+            print(f"    Judge [{label}] {'✓' if judge_result.passed else '✗'} "
+                  f"(confidence={judge_result.confidence:.2f}): {reasoning}")
 
     return results
 
@@ -353,26 +359,32 @@ def _check_assertions(case: dict, result: dict) -> dict[str, bool]:
         for tool in expected["tool_calls"]:
             checks[f"tool_called:{tool}"] = tool in actual_tools
 
-    # LLM judge checks — only if ENABLE_LLM_JUDGE=1
-    if os.environ.get("ENABLE_LLM_JUDGE") == "1":
-        case_id = case["id"]
-        # Merge judge checks from the external map and from the dataset itself
-        judge_checks_list: list[dict] = []
-        if case_id in JUDGE_CHECKS:
-            judge_checks_list.extend(JUDGE_CHECKS[case_id])
-        if expected.get("judge_checks"):
-            judge_checks_list.extend(expected["judge_checks"])
-        if judge_checks_list and has_response:
-            judge_results = _run_judge_checks(case_id, response_text, judge_checks_list)
-            checks.update(judge_results)
+    # LLM judge checks — always run when defined
+    case_id = case["id"]
+    judge_checks_list: list[dict] = []
+    if case_id in JUDGE_CHECKS:
+        judge_checks_list.extend(JUDGE_CHECKS[case_id])
+    if expected.get("judge_checks"):
+        judge_checks_list.extend(expected["judge_checks"])
+    if judge_checks_list and has_response:
+        judge_results = _run_judge_checks(case_id, response_text, judge_checks_list)
+        for k, v in judge_results.items():
+            if v is None:
+                # Judge API error — record as a skip, not a silent drop.
+                # pytest.skip() would abort the whole case; instead we mark
+                # the check key with a warning and exclude it from scoring
+                # so it doesn't silently inflate the pass rate.
+                print(f"    ⚠ {k} excluded from scoring (judge API error)")
+            else:
+                checks[k] = v
 
-    # Guard: every case must produce at least one check.
-    # If no assertions were generated, that's a test design problem.
+    # Guard: every case with a message must produce at least one
+    # substantive check.  A missing assertion set is a test design bug.
     if not checks:
         if not case["input"].get("message"):
             checks["empty_input_handled"] = True
         else:
-            checks["has_any_response"] = has_response
+            checks[f"NO_ASSERTIONS_DEFINED:{case['id']}"] = False
 
     return checks
 
@@ -398,7 +410,9 @@ def sidebar(openemr_page: Page) -> Frame:
 
 def _new_conversation(sidebar: Frame) -> None:
     """Click New Conversation in the sidebar and wait for it to reset."""
-    sidebar.locator("#new-conversation").click()
+    # Use dispatch_event to bypass Playwright's pointer-event hit-testing
+    # which fails when fixed-position iframes intercept pointer events.
+    sidebar.locator("#new-conversation").dispatch_event("click")
     sidebar.wait_for_timeout(1500)
 
 
@@ -423,7 +437,7 @@ class TestHappyPath:
             total = len(checks)
             passed = sum(1 for v in checks.values() if v)
             score = passed / total if total > 0 else 1.0
-            case_passed = score >= 0.5
+            case_passed = passed == total
 
             results.append({
                 "id": case["id"],
@@ -443,8 +457,8 @@ class TestHappyPath:
         total_cases = len(results)
         passed_cases = sum(1 for r in results if r["passed"])
         print(f"\nHappy path: {passed_cases}/{total_cases} passed")
-        assert passed_cases >= total_cases * 0.5, (
-            f"Happy path pass rate too low: {passed_cases}/{total_cases}"
+        assert passed_cases == total_cases, (
+            f"Happy path: {passed_cases}/{total_cases} passed"
         )
 
 
@@ -468,7 +482,7 @@ class TestEdgeCases:
             total = len(checks)
             passed = sum(1 for v in checks.values() if v)
             score = passed / total if total > 0 else 1.0
-            case_passed = score >= 0.5
+            case_passed = passed == total
 
             results.append({
                 "id": case["id"],
@@ -483,8 +497,8 @@ class TestEdgeCases:
         total_cases = len(results)
         passed_cases = sum(1 for r in results if r["passed"])
         print(f"\nEdge cases: {passed_cases}/{total_cases} passed")
-        assert passed_cases >= total_cases * 0.3, (
-            f"Edge case pass rate too low: {passed_cases}/{total_cases}"
+        assert passed_cases == total_cases, (
+            f"Edge cases: {passed_cases}/{total_cases} passed"
         )
 
 
@@ -508,7 +522,7 @@ class TestAdversarial:
             total = len(checks)
             passed = sum(1 for v in checks.values() if v)
             score = passed / total if total > 0 else 1.0
-            case_passed = score >= 0.5
+            case_passed = passed == total
 
             results.append({
                 "id": case["id"],
@@ -523,8 +537,8 @@ class TestAdversarial:
         total_cases = len(results)
         passed_cases = sum(1 for r in results if r["passed"])
         print(f"\nAdversarial: {passed_cases}/{total_cases} passed")
-        assert passed_cases >= total_cases * 0.5, (
-            f"Adversarial pass rate too low: {passed_cases}/{total_cases}"
+        assert passed_cases == total_cases, (
+            f"Adversarial: {passed_cases}/{total_cases} passed"
         )
 
 
@@ -548,7 +562,7 @@ class TestDSLFluency:
             total = len(checks)
             passed = sum(1 for v in checks.values() if v)
             score = passed / total if total > 0 else 1.0
-            case_passed = score >= 0.5
+            case_passed = passed == total
 
             results.append({
                 "id": case["id"],
@@ -563,8 +577,8 @@ class TestDSLFluency:
         total_cases = len(results)
         passed_cases = sum(1 for r in results if r["passed"])
         print(f"\nDSL fluency: {passed_cases}/{total_cases} passed")
-        assert passed_cases >= total_cases * 0.5, (
-            f"DSL fluency pass rate too low: {passed_cases}/{total_cases}"
+        assert passed_cases == total_cases, (
+            f"DSL fluency: {passed_cases}/{total_cases} passed"
         )
 
 
@@ -591,7 +605,7 @@ class TestOutputQuality:
             total = len(checks)
             passed = sum(1 for v in checks.values() if v)
             score = passed / total if total > 0 else 1.0
-            case_passed = score >= 0.5
+            case_passed = passed == total
 
             results.append({
                 "id": case["id"],
@@ -606,8 +620,8 @@ class TestOutputQuality:
         total_cases = len(results)
         passed_cases = sum(1 for r in results if r["passed"])
         print(f"\nOutput quality: {passed_cases}/{total_cases} passed")
-        assert passed_cases >= total_cases * 0.5, (
-            f"Output quality pass rate too low: {passed_cases}/{total_cases}"
+        assert passed_cases == total_cases, (
+            f"Output quality: {passed_cases}/{total_cases} passed"
         )
 
 
@@ -634,7 +648,7 @@ class TestMultiTurn:
             total = len(checks)
             passed = sum(1 for v in checks.values() if v)
             score = passed / total if total > 0 else 1.0
-            case_passed = score >= 0.5
+            case_passed = passed == total
 
             results.append({
                 "id": case["id"],
@@ -649,8 +663,8 @@ class TestMultiTurn:
         total_cases = len(results)
         passed_cases = sum(1 for r in results if r["passed"])
         print(f"\nMulti-turn: {passed_cases}/{total_cases} passed")
-        assert passed_cases >= total_cases * 0.5, (
-            f"Multi-turn pass rate too low: {passed_cases}/{total_cases}"
+        assert passed_cases == total_cases, (
+            f"Multi-turn: {passed_cases}/{total_cases} passed"
         )
 
 
@@ -677,7 +691,7 @@ class TestClinicalPrecision:
             total = len(checks)
             passed = sum(1 for v in checks.values() if v)
             score = passed / total if total > 0 else 1.0
-            case_passed = score >= 0.4
+            case_passed = passed == total
 
             results.append({
                 "id": case["id"],
@@ -695,8 +709,8 @@ class TestClinicalPrecision:
         total_cases = len(results)
         passed_cases = sum(1 for r in results if r["passed"])
         print(f"\nClinical precision: {passed_cases}/{total_cases} passed")
-        assert passed_cases >= total_cases * 0.4, (
-            f"Clinical precision pass rate too low: {passed_cases}/{total_cases}"
+        assert passed_cases == total_cases, (
+            f"Clinical precision: {passed_cases}/{total_cases} passed"
         )
 
 
