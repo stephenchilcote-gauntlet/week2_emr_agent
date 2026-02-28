@@ -46,12 +46,18 @@
     if (!frameDoc || !mapping.nestedFrame) return frameDoc
     try {
       var innerFrame = frameDoc.querySelector("iframe[name='" + mapping.nestedFrame + "']")
-      if (innerFrame && innerFrame.contentDocument) {
-        return innerFrame.contentDocument
+      if (innerFrame) {
+        // Nested iframe element exists — only use it if contentDocument is accessible
+        if (innerFrame.contentDocument) {
+          return innerFrame.contentDocument
+        }
+        // Iframe exists but contentDocument not ready (still loading) — don't
+        // fall back to parent doc since the target container won't be there
+        return null
       }
     } catch (_e) {}
-    // Fall back to parent frame when nested frame doesn't exist
-    // (e.g. dojo harness or simplified layouts without inner iframes)
+    // Nested iframe element doesn't exist at all (e.g. dojo harness or
+    // simplified layouts without inner iframes) — fall back to parent frame
     return frameDoc
   }
 
@@ -61,11 +67,17 @@
     if (!card) return
     var collapse = card.querySelector(".collapse")
     if (collapse && !collapse.classList.contains("show")) {
-      collapse.classList.add("show")
-      var toggle = card.querySelector("[data-toggle='collapse']")
-      if (toggle) {
-        toggle.setAttribute("aria-expanded", "true")
-        toggle.classList.remove("collapsed")
+      // Prefer Bootstrap's jQuery API when available (handles events + transitions)
+      var frameWin = containerEl.ownerDocument && containerEl.ownerDocument.defaultView
+      if (frameWin && frameWin.jQuery) {
+        frameWin.jQuery(collapse).collapse("show")
+      } else {
+        collapse.classList.add("show")
+        var toggle = card.querySelector("[data-toggle='collapse']")
+        if (toggle) {
+          toggle.setAttribute("aria-expanded", "true")
+          toggle.classList.remove("collapsed")
+        }
       }
     }
   }
