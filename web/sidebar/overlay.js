@@ -22,7 +22,7 @@
     Observation: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
     Vital: { tab: "pat", container: "#vitals_ps_expand", supportsRowTarget: true },
     SoapNote: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
-    Procedure: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
+    Procedure: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
     DiagnosticReport: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
   }
 
@@ -50,7 +50,9 @@
         return innerFrame.contentDocument
       }
     } catch (_e) {}
-    return null
+    // Fall back to parent frame when nested frame doesn't exist
+    // (e.g. dojo harness or simplified layouts without inner iframes)
+    return frameDoc
   }
 
   function ensureCardExpanded(containerEl) {
@@ -276,6 +278,9 @@
     // SoapNote handles its own frameDoc lookup (may co-locate with encounter ghost)
     if (item.resource_type === "SoapNote") {
       return applyCreateOverlaySoap(item, mapping, isFocused)
+    }
+    if (item.resource_type === "Procedure") {
+      return applyCreateOverlayProcedure(item, mapping, isFocused)
     }
 
     var frameDoc = getFrameDocumentForMapping(mapping)
@@ -662,6 +667,28 @@
       { label: "Assessment", value: pv.assessment },
       { label: "Plan", value: pv.plan },
     ])
+
+    container.insertBefore(ghost, container.firstChild)
+    injectedElements.push({ element: ghost, frameDoc: frameDoc })
+    if (isFocused) scrollIntoView(ghost)
+    return { applied: true }
+  }
+
+  function applyCreateOverlayProcedure(item, mapping, isFocused) {
+    var frameDoc = getFrameDocumentForMapping(mapping)
+    if (!frameDoc) return { applied: false, reason: "Frame not available" }
+
+    var container = frameDoc.querySelector("#partable")
+    if (!container) return { applied: false, reason: "Container #partable not found" }
+
+    var pv = item.proposed_value || {}
+    var fields = []
+    if (pv.code_text || pv.display) fields.push({ label: "Procedure", value: pv.code_text || pv.display })
+    if (pv.code) fields.push({ label: "Code", value: pv.code })
+    if (pv.date) fields.push({ label: "Date", value: pv.date })
+    if (pv.note) fields.push({ label: "Notes", value: pv.note })
+
+    var ghost = buildFormHolderGhost(frameDoc, item, isFocused, "Procedure", fields)
 
     container.insertBefore(ghost, container.firstChild)
     injectedElements.push({ element: ghost, frameDoc: frameDoc })

@@ -14,59 +14,97 @@
 </head>
 <body>
   <div class="container-fluid">
+
+    <!-- ═══ Encounters List Table ═══ -->
+    <h5 class="mb-3">Encounters</h5>
+    <table class="table table-striped jumbotron p-2 mb-4">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Encounter</th>
+          <th>Type</th>
+          <th>Facility</th>
+          <th>Provider</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="encrow" data-encounter="1">
+          <td>2026-02-25</td>
+          <td>1</td>
+          <td>Office Visit</td>
+          <td>Main Clinic</td>
+          <td>Dr. Smith</td>
+          <td>Follow-up: HTN, DM management</td>
+        </tr>
+        <tr class="encrow" data-encounter="2">
+          <td>2026-01-15</td>
+          <td>2</td>
+          <td>Office Visit</td>
+          <td>Main Clinic</td>
+          <td>Dr. Smith</td>
+          <td>Annual physical</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ═══ Encounter Forms (partable) ═══ -->
     <h5 class="mb-3">Encounter #1 — 2026-02-25 (Office Visit)</h5>
+    <div id="partable">
 
-    <!-- SOAP Note form stub -->
-    <div class="form-holder" id="soap~1">
-      <div class="card-header" data-toggle="collapse" data-target="#divid_1">
-        <i class="fa fa-compress mr-1"></i> SOAP Note
-      </div>
-      <div id="divid_1" class="collapse show">
-        <div class="card-body">
-          <div class="row">
-            <div class="col-md-6">
-              <label><strong>Subjective</strong></label>
-              <p>Patient reports increased fatigue and occasional dizziness over the past 2 weeks. Denies chest pain or shortness of breath. Blood pressure has been "running high" per home monitor.</p>
+      <!-- SOAP Note form stub -->
+      <div class="form-holder" id="soap~1">
+        <div class="card-header" data-toggle="collapse" data-target="#divid_1">
+          <i class="fa fa-compress mr-1"></i> SOAP Note
+        </div>
+        <div id="divid_1" class="collapse show">
+          <div class="card-body">
+            <div class="row">
+              <div class="col-md-6">
+                <label><strong>Subjective</strong></label>
+                <p>Patient reports increased fatigue and occasional dizziness over the past 2 weeks. Denies chest pain or shortness of breath. Blood pressure has been "running high" per home monitor.</p>
+              </div>
+              <div class="col-md-6">
+                <label><strong>Objective</strong></label>
+                <p>BP 142/88, HR 76, Temp 98.4°F. Alert and oriented x3. Heart RRR, no murmurs. Lungs CTA bilaterally.</p>
+              </div>
             </div>
-            <div class="col-md-6">
-              <label><strong>Objective</strong></label>
-              <p>BP 142/88, HR 76, Temp 98.4°F. Alert and oriented x3. Heart RRR, no murmurs. Lungs CTA bilaterally.</p>
-            </div>
-          </div>
-          <div class="row">
-            <div class="col-md-6">
-              <label><strong>Assessment</strong></label>
-              <p>1. Hypertension, poorly controlled (I10)<br/>2. Type 2 DM, stable (E11.9)<br/>3. Fatigue — likely medication side effect vs. anemia</p>
-            </div>
-            <div class="col-md-6">
-              <label><strong>Plan</strong></label>
-              <p>1. Increase Lisinopril to 20mg daily<br/>2. Order CBC, CMP, HbA1c<br/>3. Follow up in 4 weeks<br/>4. Continue Metformin 500mg BID</p>
+            <div class="row">
+              <div class="col-md-6">
+                <label><strong>Assessment</strong></label>
+                <p>1. Hypertension, poorly controlled (I10)<br/>2. Type 2 DM, stable (E11.9)<br/>3. Fatigue — likely medication side effect vs. anemia</p>
+              </div>
+              <div class="col-md-6">
+                <label><strong>Plan</strong></label>
+                <p>1. Increase Lisinopril to 20mg daily<br/>2. Order CBC, CMP, HbA1c<br/>3. Follow up in 4 weeks<br/>4. Continue Metformin 500mg BID</p>
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- Vitals form stub -->
-    <div class="form-holder" id="vitals~2">
-      <div class="card-header" data-toggle="collapse" data-target="#divid_2">
-        <i class="fa fa-compress mr-1"></i> Vitals
-      </div>
-      <div id="divid_2" class="collapse show">
-        <div class="card-body">
-          <table class="table table-sm table-bordered">
-            <tr><td>Blood Pressure</td><td>142/88 mmHg</td></tr>
-            <tr><td>Pulse</td><td>76 bpm</td></tr>
-            <tr><td>Temperature</td><td>98.4 °F</td></tr>
-            <tr><td>Respirations</td><td>16 /min</td></tr>
-            <tr><td>Oxygen Saturation</td><td>98%</td></tr>
-            <tr><td>Weight</td><td>185 lbs</td></tr>
-            <tr><td>Height</td><td>5' 10"</td></tr>
-            <tr><td>BMI</td><td>26.5</td></tr>
-          </table>
+      <!-- Vitals form stub -->
+      <div class="form-holder" id="vitals~2">
+        <div class="card-header" data-toggle="collapse" data-target="#divid_2">
+          <i class="fa fa-compress mr-1"></i> Vitals
+        </div>
+        <div id="divid_2" class="collapse show">
+          <div class="card-body">
+            <table class="table table-sm table-bordered">
+              <tr><td>Blood Pressure</td><td>142/88 mmHg</td></tr>
+              <tr><td>Pulse</td><td>76 bpm</td></tr>
+              <tr><td>Temperature</td><td>98.4 °F</td></tr>
+              <tr><td>Respirations</td><td>16 /min</td></tr>
+              <tr><td>Oxygen Saturation</td><td>98%</td></tr>
+              <tr><td>Weight</td><td>185 lbs</td></tr>
+              <tr><td>Height</td><td>5' 10"</td></tr>
+              <tr><td>BMI</td><td>26.5</td></tr>
+            </table>
+          </div>
         </div>
       </div>
-    </div>
+
+    </div><!-- /partable -->
 
   </div>
 
