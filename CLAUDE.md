@@ -1,5 +1,12 @@
 # Claude Code Instructions
 
+## Setup (run once per clone)
+
+    git config core.hooksPath .githooks
+
+This activates the pre-push safety hook that blocks pushes from detached HEADs
+and pushes that are behind origin (the most common multi-agent collision).
+
 ## Git discipline
 
 Before committing or pushing, always run `git status` and `git branch` first.
