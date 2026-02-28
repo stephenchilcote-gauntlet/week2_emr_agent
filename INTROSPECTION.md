@@ -1,199 +1,358 @@
-# INTROSPECTION
+# Project Failure Introspection
 
-## Scope And Method
+## Method
 
-- Reviewed entire local git history from first commit to `HEAD` (`43` commits, `2026-02-23` to `2026-02-27`).
-- Extracted `Amp-Thread-ID` trailers from commit metadata and correlated each thread via Amp thread reads.
-- Mapped repeated failures by recurrence across commits + thread narratives, then derived systemic root causes and corrective operating rules.
+Reviewed all 43 commits (2026-02-23 to 2026-02-28) and correlated against all 13
+distinct Amp threads referenced in commit metadata. Seven commits lack thread
+trailers entirely. Each thread was read to extract debugging struggles, rework
+cycles, wasted effort, and decision failures.
 
-## Commit/Thread Correlation Summary
+---
 
-- Total commits: `43`
-- Commits with explicit Amp thread trailer: `36`
-- Commits missing explicit thread trailer: `7` (`6` feature/fix commits on `2026-02-25` + `1` merge commit)
-- Distinct referenced Amp threads: `12`
-- Largest single-thread batch: `T-019c9305-5346-70b5-be60-2da95e5fec01` (`16` commits)
+## Timeline & Thread Map
 
-## Repeated Issues And Process Failures
+| Date | Thread | Commits | Summary |
+|------|--------|---------|---------|
+| Feb 23 15:26 | T-…9d62 | 1 | Project spec, design research |
+| Feb 23 15:50 | T-…01bd8 | 1 | Mega-build: agent, API, 5 tools, verification, Docker, 52 eval cases (36 files, 5376 lines) |
+| Feb 24 12:01 | T-…793e | 1 | **Rip out FHIR write path** — 365 lines deleted, 28 tests rewritten |
+| Feb 24 22:19–22:59 | T-…ec01 | **16** | Retroactive commit split of massive uncommitted batch (~2700 ins, 25 files) |
+| Feb 24 23:35 | T-…c918 | 1 | Hetzner deployment (Fly.io abandoned), send-button bug |
+| Feb 25 11:39 | T-…d493 | 3 | Medication table myth debunked, API hardening, prod deployment rework |
+| Feb 25 12:23 | T-…7270 | 3 | Eval expectations wrong → SoapNote/Vital added, ServiceRequest removed |
+| Feb 25 22:16–22:17 | T-…d042 + **no trailer** | 6 | Label system replaced, med safety, audit trail, tour mode, eval fixes |
+| Feb 26 10:45 | T-…37de | 6 | Docker, deploy, UI, tests, docs — another big batch |
+| Feb 26 12:50–13:13 | T-…70efc | 2 | Overlay engine + sidebar update |
+| Feb 27 08:07–08:14 | T-…98a + T-…e873 | 2 | Deploy optimization (15 min → 1 min), overlay scroll fix |
+| Feb 28 08:14 | T-…c0c2 | 1 | Previous introspection report |
 
-## 1) Architecture Decisions Based On Unverified Capability Assumptions
+**Key observation:** 5 of the 6 project days were spent primarily on rework,
+deployment debugging, and fixing incorrect assumptions. Net-new user-visible
+feature work was concentrated in just 2 sessions (the initial build and the
+Feb 25 feature batch).
 
-This was the dominant repeated failure: major implementation decisions were made before validating OpenEMR behavior against live endpoints and DB reality.
+---
 
-Evidence:
-- `f779169c`: remove FHIR write path after discovering FHIR write support is mostly unavailable.
-- `89f7cff8`: correct medication table model after prior misinformation.
-- `7cbcb116`: align eval expectations with actual API capabilities.
-- `c2863eee`: add SoapNote/Vital writes after earlier read-only assumptions were disproven.
-- Thread signals: `T-019c90c8`, `T-019c95e1`, `T-019c9601`, `T-019c9827` repeatedly describe incorrect capability beliefs and later reversals.
+## Repeated Failure #1: Build First, Verify Never
 
-Impact:
-- Rework churn in core architecture and prompts.
-- Eval baselines invalidated by shifting capability model.
-- Loss of schedule due to redo cycles.
+**The single most damaging pattern.** Major subsystems were designed and fully
+implemented based on assumptions about OpenEMR's API that turned out to be wrong.
+The assumptions were never tested against the live system before coding began.
 
-## 2) Prompt / Backend / Eval Contract Drift
+### Instance A: The FHIR Write Path (wasted: ~1 full day)
 
-System prompt rules, backend write capabilities, and eval expectations repeatedly diverged.
+- **Thread T-…01bd8** (Feb 23): Built `fhir_write()`, 7 FHIR builder functions,
+  `translator.py` (533 lines), and 28+ associated tests.
+- **Thread T-…793e** (Feb 24): Discovered OpenEMR FHIR is **read-only** for nearly
+  all clinical resources. Deleted 365 lines. Rewrote 28 tests. Redesigned write
+  architecture around REST API.
+- **Cost:** The entire write subsystem was thrown away. The translator was reduced
+  from 533 → 168 lines (68% deletion).
 
-Evidence:
-- `6680c5ec`: prompt overhaul introduces new constraints.
-- `7cbcb116`, `f21938f5`: eval expectations had to be relaxed/realigned.
-- `c2863eee`: backend adds new writable types, requiring prompt + eval updates.
-- Thread signals: repeated mention of baseline mismatch and post-change regressions (`T-019c95e1`, `T-019c9601`, `T-019c9827`).
+### Instance B: The Medication "Two Tables" Myth (wasted: ~3 hours)
 
-Impact:
-- “Failing” evals that were actually contract mismatches.
-- Frequent test reclassification instead of stable signal.
+- **Thread T-…d493** (Feb 25): Code and prompts contained a claim that OpenEMR
+  stores medications in separate `lists` + `prescriptions` tables. This was
+  "disproven during debugging — the prescriptions table was empty, everything is
+  in the lists table."
+- The real bug was NULL UUIDs from REST POST, which was masked by the wrong
+  mental model.
+- **Cost:** Debugging pointed the wrong direction. Prompts had to be rewritten.
+  The `_resolve_list_id` logic and error messages were wrong.
 
-## 3) Write-Path Correctness Gaps Found After Feature Development
+### Instance C: ServiceRequest Write Endpoints (wasted: ~2 hours)
 
-Critical write safety bugs were discovered after substantial implementation, not prevented by up-front invariant checks.
+- **Thread T-…7270** (Feb 25): Eval cases expected the agent to create
+  `ServiceRequest` resources. Investigation proved "genuinely NO write endpoint"
+  exists. Three eval cases (hp-13, dsl-02, dsl-10) had to be rewritten.
+- **Cost:** Eval baseline invalidated. Time spent debugging "failures" that
+  were actually impossible expectations.
 
-Evidence:
-- `3bb8a909`: multiple write-path bugs fixed, including dangerous delete behavior.
-- `761f789e`: add pre-caching workaround for null UUID/list-ID behavior.
-- `4096f1a8`: verification path repaired after API changes.
-- Thread signals: silent field drops and API accept-but-ignore behavior (`T-019c9305`).
+### Instance D: DocumentReference/Observation Mapping (wasted: ~2 hours)
 
-Impact:
-- Risk of false “success” states.
-- Patient safety and data integrity risk if not caught.
+- Same thread: eval cases expected `DocumentReference` and `Observation` types.
+  These had to be remapped to `SoapNote` and `Vital` once actual REST API
+  routes were discovered by reading PHP source (`_rest_routes.inc.php`).
+- The user noted: "had to perform a thorough ground-truth investigation by
+  manually reading PHP route definitions."
 
-## 4) Deployment And Bootstrap Fragility (OAuth/OpenEMR/Certs)
+### Root cause
 
-Bring-up/deploy repeatedly broke around initialization ordering and environment propagation.
+No capability discovery step existed. The project assumed API documentation
+was accurate and complete. It wasn't. A 30-minute session running `curl`
+against every REST endpoint on day 1 would have prevented all four instances.
 
-Evidence:
-- `bf0c1dc0`, `bada2689`, `8cdbe5ce`, `5e482748`, `0699e0c7`: repeated deployment workflow surgery.
-- Thread signals: OAuth chicken-and-egg, OpenEMR long boot windows, env not reloaded on restart, cert persistence issues (`T-019c9328`, `T-019c9ad6`, `T-019c9b49`, `T-019c9f6a`).
+---
 
-Impact:
-- Deployment cycle times of ~15 minutes before optimization.
-- High operator error probability and repeated manual recovery.
+## Repeated Failure #2: Massive Uncommitted Work Sessions
 
-## 5) Source-Of-Truth Hygiene Failures
+The project repeatedly accumulated enormous uncommitted deltas, then had to
+spend time retroactively decomposing them into commits.
 
-Code existed in multiple effective locations with drift between git-tracked source and deployed/module copies.
+### Instance A: The 16-Commit Dump (Thread T-…ec01, Feb 24)
 
-Evidence:
-- Thread `T-019c9f6f` explicitly identifies divergence between `web/sidebar/` and `openemr/.../assets/` copies and dead-code paths.
-- Follow-up commits (`b6067d80`, `1a417f0a`, `635e2cd5`) are cleanup and behavior fixes after reconciliation.
+- User asked to commit 4 bug fixes. `git status` revealed **25 files modified,
+  2739 insertions, 509 deletions**, plus dozens of untracked files.
+- The agent had to `git diff` every file to "understand" its own changes.
+- Result: 16 retroactive commits covering DSL parser, web UI, session
+  persistence, eval expansion, verification overhaul, PHI-safe tracing,
+  and documentation — all in one session.
+- **Cost:** Review impossible. Regression risk high. Several commits in this
+  batch turned out to contain bugs fixed in later threads.
 
-Impact:
-- Repository stopped representing production reality.
-- Regressions introduced by patching wrong copy.
+### Instance B: The 6-Commit Batch (Thread T-…37de, Feb 26)
 
-## 6) Oversized Change Batches And Late Integration
+- ~950 lines across 15 files, spanning Docker, backend, frontend, and tests.
+- Again committed as a single batch after the fact.
 
-Repeated pattern of very large uncommitted or mixed-scope deltas spanning infrastructure, backend, UI, tests, docs.
+### Instance C: Missing Thread Trailers (Feb 25, 5 commits)
 
-Evidence:
-- Thread `T-019c9305`: ~2700-line / 25-file uncommitted set requiring manual split.
-- Thread `T-019c9ad6`: ~800 insertions across 15 files in one working batch.
+- Five feature commits (medication safety, prompt guidance, audit trail, tour
+  mode, eval fixes) lack `Amp-Thread-ID` trailers entirely.
+- These changes cannot be correlated to any discussion context for forensic
+  purposes.
 
-Impact:
-- Harder review and root-cause isolation.
-- Increased probability of missed regressions and missing trailers.
+### Root cause
 
-## 7) Traceability Gaps In Commit Metadata
+No discipline around incremental commit cadence. Work sessions ran until
+context was exhausted, then everything was dumped at once. The AGENTS.md
+rule "Always commit after doing any work" was not followed.
 
-Not every commit includes the required Amp thread trailer, breaking forensic continuity.
+---
 
-Evidence:
-- Missing trailer commits: `5f7f4251`, `8a32b0bc`, `348fc7fe`, `e06b76c5`, `f21938f5`, `73242280`, plus merge `6f43bf45`.
-- These missing entries sit inside active thread work, making future audit correlation harder.
+## Repeated Failure #3: Prompt/Backend/Eval Contract Drift
 
-Impact:
-- Lost decision provenance.
-- Harder to reconstruct why a behavior exists.
+The system has three independently evolving contracts that must agree:
+1. **System prompt** — tells the LLM what resources are writable
+2. **Backend** — translator/endpoint map that actually executes writes
+3. **Eval dataset** — expected behaviors for test cases
 
-## 8) Test Signal Instability And Non-Determinism
+These three diverged **at least 4 times**, each time producing a batch of
+false failures.
 
-Eval outcomes were repeatedly influenced by timeouts, model lifecycle changes, and nondeterministic responses.
+| Date | What changed | What broke |
+|------|-------------|------------|
+| Feb 24 | Prompt restricted writable types (6680c5e) | 7 eval cases now expected impossible writes |
+| Feb 25 | Backend added SoapNote/Vital (c2863ee) | Eval expected old types, prompt not updated |
+| Feb 25 | Prompt added "don't re-confirm" guidance | Agent behavior changed, 3 evals failed |
+| Feb 25 | LLM judge model hit EOL | All eval judgments invalid until model updated |
 
-Evidence:
-- `82550e80`: retries + timeout increases.
-- `f21938f5`: LLM judge model migration and timeout tuning.
-- Threads `T-019c95e1`, `T-019c9601`, `T-019c9827`: flaky cases, baseline drift, over-clarification variability.
+### Root cause
 
-Impact:
-- Reduced confidence in pass/fail as release gate.
-- Time spent tuning harness instead of stabilizing behavior.
+No automated check that these three contracts are in sync. Each was updated
+manually. When one changed, the others were forgotten until failures appeared.
 
-## 9) Integration Bugs Escaping Until E2E/Runtime
+---
 
-User-visible regressions and UI interaction bugs were repeatedly discovered only after runtime integration.
+## Repeated Failure #4: Deployment as a Time Sink
 
-Evidence:
-- `bf0c1dc0`: send button disabled bug fixed.
-- `635e2cd5`: overlay scroll/expand timing bug fixed.
-- Threads mention standalone UI tests passing while embedded integration failed (`T-019c9328`).
+At least **6 of 13 threads** (46%) dealt primarily with deployment problems.
+The deployment surface area was enormous: OpenEMR + MySQL + Agent + Jaeger +
+OAuth2 + SSL + Apache proxy + module registration.
 
-Impact:
-- Quality appears acceptable in isolated tests, but fails in real workflow.
+### The Deployment Bug Hall of Fame
 
-## Why The Project Is Off-Track
+(Sourced from `DEPLOY.md`'s "Things That Go Wrong (and have, repeatedly)" table)
 
-The project is not behind because of insufficient effort; it is behind because feedback loops were structurally weak:
+| Bug | Times hit | Thread(s) |
+|-----|-----------|-----------|
+| OAuth `invalid_grant` (wrong password var) | 3+ | T-…c918, T-…37de, T-…70efc |
+| `is_enabled=0` in oauth_clients | 3+ | T-…c918, T-…d493 |
+| REST APIs not enabled in globals | 2+ | T-…c918, T-…37de |
+| Deploy overwrites working `.env` | 3+ | T-…37de, T-…70efc |
+| Module not in `modules` table | 2+ | T-…c918, T-…37de |
+| Apache proxy not configured | 2+ | T-…37de, T-…70efc |
+| SSL certs lost on `docker down -v` | 1 | T-…37de |
+| Sidebar 404 / stale Docker IP | 2+ | T-…70efc |
 
-- Capability facts were learned after implementation, not before it.
-- Contract synchronization (prompt/backend/eval) was manual and drift-prone.
-- Deploy/bootstrap process consumed significant engineering time with repeated infra breakage.
-- Large WIP batches and source-of-truth drift amplified regression risk.
-- Commit-to-thread traceability was inconsistent, reducing diagnostic speed.
+### Platform Pivot: Fly.io → Hetzner VPS
 
-## Corrective Operating Model (Immediate)
+- Thread T-…c918 (Feb 24): Fly.io's ephemeral model was fundamentally
+  incompatible with MySQL + persistent volumes + OpenEMR's heavy PHP stack.
+  All Fly.io planning was wasted. Pivoted to raw VPS.
 
-## A) Capability Ledger Before Any Feature Work
+### Deployment Cycle Time
 
-Create and enforce `docs/CAPABILITY_LEDGER.md` as release-critical truth:
-- For each resource/action: `read path`, `write path`, required IDs (`pid`/`uuid`/`eid`), known API caveats, and SQL confirmation query.
-- No prompt/eval/backend change may merge unless ledger is updated in same PR.
+- Original deploy: **~15 minutes** (2.1GB openemr/ rsync + full rebuild)
+- After optimization (Feb 27): **~1 minute** (agent-only mode)
+- This optimization came on day 5 of 7. Days 2–4 ran at 15-min deploy cycles.
 
-## B) Contract-Lock Tests For Prompt/Backend/Eval Sync
+### Root cause
 
-Add one contract test suite that fails on drift:
-- Parse prompt writable-type section and compare to backend translator/endpoint map.
-- Validate eval expected write/refusal behavior against same map.
-- Block merges on mismatch.
+- OpenEMR was not designed to be deployed as a containerized microservice.
+  The project fought this reality at every step.
+- OAuth2 bootstrap has a chicken-and-egg problem (creds need DB, DB needs
+  OpenEMR boot, agent needs creds) that was never fully automated.
+- No deployment verification script existed until late in the project.
 
-## C) Deployment As A Verified State Machine
+---
 
-Codify deploy flow into machine-checkable phases:
-- `infra up` -> `openemr healthy` -> `oauth registered` -> `agent auth check` -> `sidebar route check`.
-- `scripts/verify-deployment.sh` must gate eval runs and manual QA.
-- Fail fast on first broken precondition; no partial "looks okay" deploys.
+## Repeated Failure #5: Rework of Core Abstractions
 
-## D) Single Source Of Truth Enforcement
+Multiple core abstractions were built, found inadequate, and replaced entirely.
 
-- Keep `web/sidebar/` as canonical.
-- CI check: fail if tracked file hash differs from deployed asset path source at build time.
-- Disallow direct edits under `openemr/.../assets/` except generated/symlinked artifacts.
+### The Label System (built twice)
 
-## E) WIP And Commit Hygiene Rules
+1. **First version** (Feb 24, T-…ec01): `LabelRegistry` — 256-word XOR
+   compression, stateful, collision-prone. Required session state management.
+2. **Second version** (Feb 25, T-…d042): Bijective 10-word UUID encoding —
+   stateless, zero collisions. Required removing `LabelRegistry` from
+   `AgentSession` and all call sites.
+- **Cost:** The entire first label system was thrown away 24 hours after creation.
 
-- Max logical scope per commit: one subsystem or one failure class.
-- Require `Amp-Thread-ID` trailer on every non-merge commit.
-- Require merge checklist: tests run, deploy verification run, capability ledger updated (if relevant).
+### The Write Path (redesigned twice)
 
-## F) Stabilize Test Signal
+1. **FHIR writes** (Feb 23): Direct FHIR POST/PUT.
+2. **REST API writes** (Feb 24): After FHIR proved read-only.
+3. **Manifest DSL** (Feb 24): XML-based manifest approval flow.
+- Each redesign required updating translator, executor, verification,
+  prompts, and tests.
 
-- Pin judge and runtime models in one config file with explicit EOL date comments.
-- Split eval dashboard into `deterministic checks` vs `LLM-behavior checks`.
-- Track flake rate per case; cases above threshold are quarantined until redesigned.
+### Root cause
 
-## G) Daily Recovery Cadence Until Deadline
+Prototyping was done at production scale. Instead of spiking a minimal
+proof-of-concept to validate the approach, full implementations with tests
+and documentation were built before the core design was validated.
 
-- 15-minute daily risk review: top 3 blockers + owner + next proof.
-- End-of-day checkpoint requires: green contract-lock tests, deploy verification result, and updated risk burndown.
+---
 
-## Near-Term Success Criteria
+## Repeated Failure #6: Subagent/Tooling Failures
 
-The recovery plan is working only if these are true for 3 consecutive days:
+### create_file Crashes (Thread T-…9d62, Feb 23)
 
-- No commit without thread trailer (excluding merges).
-- No prompt/backend/eval drift incidents.
-- One-command deploy verification passes before every eval run.
-- Zero edits to non-canonical sidebar asset copies.
-- Eval run produces stable delta (no unexplained >2-case swing run-to-run).
+- Subagents building the eval framework and dataset crashed repeatedly with
+  the same error: `create_file: content parameter is required`.
+- The main agent had to manually intervene to complete the work.
+- This happened on the very first thread, during initial project setup.
+
+### Model Lifecycle Chaos
+
+- `claude-3-5-haiku-20241022` hit EOL on Feb 19, 2026. The project was still
+  referencing it.
+- `claude-haiku-4-20250514` was a **hallucinated model ID** that was baked
+  into the codebase.
+- Kimi K2.5 via OpenRouter needed `max_tokens >= 2048` due to reasoning token
+  consumption — discovered only after repeated empty responses.
+
+### Root cause
+
+External dependencies (LLM model availability, tool behavior) were treated
+as stable when they were not. No pinning, no EOL tracking, no validation.
+
+---
+
+## Repeated Failure #7: Test Signal Never Stabilized
+
+The eval suite went through at least 4 major expectation rewrites and never
+produced consistent signal for more than one session.
+
+| Date | Eval event | Result |
+|------|-----------|--------|
+| Feb 23 | Initial 52 cases created | Baseline claimed 97.5% pass |
+| Feb 24 | Expanded to 79 cases | Untested against live system |
+| Feb 25 | 7 cases failed due to prompt restriction | Expectations rewritten |
+| Feb 25 | 5 more cases failed (SoapNote/Vital mismatch) | Expectations rewritten again |
+| Feb 25 | 3 cases failed (agent over-clarifying) | Attributed to model behavior, not fixed |
+| Feb 25 | Judge model hit EOL | Judge migrated, timeout increased |
+| Feb 25 | Known flaky tests (hp-02, ec-04, adv-06) | Acknowledged but not quarantined |
+
+The eval suite was never a reliable release gate. Every run required manual
+interpretation. "Pass rate" numbers were meaningless because the expected
+answers kept changing.
+
+### Root cause
+
+Eval cases were written against assumed behavior, not observed behavior.
+When reality differed, the tests were changed to match rather than the
+system being fixed to match the tests. This inverts the purpose of testing.
+
+---
+
+## Repeated Failure #8: Source-of-Truth Divergence
+
+Sidebar UI code existed in three locations:
+1. `web/sidebar/` (git-tracked, canonical)
+2. `openemr/interface/modules/custom_modules/.../assets/` (fork, deployed)
+3. Docker bind-mount overlays
+
+Thread T-…70efc explicitly identified divergence between these copies.
+Subsequent commits (b6067d8, 1a417f0, 635e2cd) were cleanup after
+reconciliation. The `embed.js` in the local repo used a different API path
+(`/agent-api/ui`) than the fork version (`sidebar_frame.php`).
+
+### Root cause
+
+The project needed to inject code into a PHP application that has its own
+module system. Rather than establishing a single build pipeline on day 1,
+files were manually copied between locations and diverged.
+
+---
+
+## Where Did the Time Actually Go?
+
+Estimated breakdown of engineering effort across the 6-day development period:
+
+| Activity | Est. hours | % | Value |
+|----------|-----------|---|-------|
+| Deployment/infra debugging | ~12 | 25% | Low — mostly rework |
+| Reworking incorrect assumptions (FHIR, meds, evals) | ~10 | 21% | Zero — pure waste |
+| Retroactive commit organization | ~3 | 6% | Zero — process debt |
+| Feature development (agent, tools, UI, safety) | ~14 | 29% | High |
+| Eval framework & test writing | ~5 | 10% | Medium — unstable |
+| Documentation | ~3 | 6% | Medium |
+| Design/research | ~1 | 2% | High |
+
+**~52% of total effort produced no lasting value.** The productive 48%
+built a functional agent with a real UI, but the rework overhead prevented
+the project from reaching production quality.
+
+---
+
+## Root Cause Summary
+
+The project is off-track for one fundamental reason: **the feedback loop
+between "what does the system actually do" and "what are we building" was
+broken.** This manifested as:
+
+1. **No capability discovery before implementation.** OpenEMR's actual API
+   surface was never mapped. Every incorrect assumption became a rework cycle.
+
+2. **No contract enforcement.** Prompt, backend, and eval were manually
+   synchronized. They drifted constantly.
+
+3. **No incremental validation.** Work accumulated in huge batches. Bugs
+   were discovered late. Commits were retroactive.
+
+4. **Infrastructure treated as solved.** Deployment was assumed to be a
+   one-time cost. It was actually the project's largest ongoing time sink.
+
+5. **Tests followed the code, not the other way around.** When tests failed,
+   expectations were changed rather than behavior being fixed. The eval suite
+   never served as a stability gate.
+
+---
+
+## What Must Change Now
+
+### 1. Stop building things that haven't been verified to work
+
+Before touching any code, run the actual API call. Confirm the endpoint
+exists, accepts the payload, and returns what you expect. Document it in
+a capability ledger. This takes 5 minutes and saves 5 hours.
+
+### 2. Freeze the eval expectations
+
+The eval suite has been rewritten 4 times. Pick the current state, run it
+once, record the results, and never change expectations again. Report
+actual pass rate honestly. A stable 75% is more credible than a
+self-adjusting 97.5%.
+
+### 3. One-command deploy verification before every change
+
+`scripts/verify-deployment.sh` must pass before any eval run or demo
+recording. No more partial deploys that "look okay."
+
+### 4. Commit after every logical change, not at end of session
+
+The AGENTS.md rule exists. Follow it. A 50-line commit with a clear
+message is worth more than a 2700-line dump that requires archaeology.
