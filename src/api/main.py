@@ -272,7 +272,7 @@ async def list_sessions(
     user_id: str = Depends(_require_user_id),
 ) -> list[dict[str, Any]]:
     sessions = app.state.session_store.list_for_user(user_id)
-    return [_session_summary(session) for session in sessions]
+    return [_session_summary(session) for session in sessions if session.messages]
 
 
 @app.get("/api/sessions/{session_id}/messages")

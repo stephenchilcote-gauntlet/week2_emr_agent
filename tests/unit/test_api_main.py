@@ -74,6 +74,13 @@ def test_sessions_are_user_scoped() -> None:
         client.app.state.agent_loop = _DummyAgentLoop()
         create = client.post("/api/sessions", headers=_headers("u-1")).json()
 
+        # Send a message so the session has content (empty sessions are filtered)
+        client.post(
+            "/api/chat",
+            headers=_headers("u-1"),
+            json={"session_id": create["session_id"], "message": "hello"},
+        )
+
         forbidden = client.get(
             f"/api/sessions/{create['session_id']}/messages",
             headers=_headers("u-2"),

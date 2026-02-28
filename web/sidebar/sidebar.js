@@ -211,21 +211,9 @@ class SidebarApp {
   async start() {
     this.bindEvents()
     this.refreshContext()
-    await this.loadSessionList()
-
-    if (this.state.sessionID) {
-      const loaded = await this.loadConversation(this.state.sessionID)
-      if (!loaded) {
-        this.state.sessionID = null
-        sessionStorage.removeItem(SESSION_KEY)
-        this.renderSystemNotice("Your previous session expired. Starting a new conversation.")
-      }
-    }
-
-    if (!this.state.sessionID) {
-      await this.createSession()
-    }
-
+    sessionStorage.removeItem(SESSION_KEY)
+    this.state.sessionID = null
+    await this.createSession()
     this.toggleSend(true)
   }
 
@@ -281,10 +269,20 @@ class SidebarApp {
 
     window.addEventListener("message", (event) => {
       if (event.data && event.data.type === "clinical-assistant-context") {
-        this.state.patientID = event.data.pid || null
+        const newPid = event.data.pid || null
+        const oldPid = this.state.patientID
+        this.state.patientID = newPid
         this.state.encounterID = event.data.encounter_id || null
         this.state.patientName = event.data.pname || null
         this.updateContextDisplay()
+        if (newPid !== oldPid) {
+          this.state.pendingManifest = null
+          this.state.verificationResults = null
+          this.state.verificationPassed = null
+          this.state.manifestOpenemrPid = null
+          this.renderReviewPanel()
+          this.createSession(true)
+        }
       }
       if (event.data && event.data.type === "overlay:result") {
         this.handleOverlayResult(event.data)
