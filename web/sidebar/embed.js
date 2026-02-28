@@ -1,4 +1,11 @@
 (function injectClinicalAssistantSidebar() {
+  // Only inject into the top-level window — not into iframes.
+  // Without this guard, sidebar_frame.php's unauthenticated redirect to the
+  // login page (which also includes embed.js) creates an infinite iframe loop.
+  if (window !== window.top) {
+    return
+  }
+
   const SIDEBAR_ID = "openemr-clinical-assistant-sidebar"
   const MIN_WIDTH = 1024
   const CONTEXT_POLL_MS = 2000
@@ -91,7 +98,7 @@
     wrapper.style.boxShadow = "0 14px 34px rgba(15, 23, 42, 0.12)"
 
     const frame = document.createElement("iframe")
-    frame.src = "/agent-api/ui"
+    frame.src = "/interface/modules/custom_modules/oe-module-clinical-assistant/public/sidebar_frame.php"
     frame.title = "Clinical Assistant"
     frame.style.width = "100%"
     frame.style.height = "100%"
@@ -101,7 +108,7 @@
     document.body.appendChild(wrapper)
 
     var overlayScript = document.createElement("script")
-    overlayScript.src = "/agent-api/ui/assets/overlay.js"
+    overlayScript.src = "/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/overlay.js"
     document.head.appendChild(overlayScript)
 
     if (window.innerWidth >= MIN_WIDTH) {

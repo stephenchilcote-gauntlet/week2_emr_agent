@@ -110,14 +110,16 @@ def _require_user_id(
 
 
 def _summarize_tool_calls(session: AgentSession) -> list[dict[str, Any]] | None:
-    for message in reversed(session.messages):
+    all_counts: Counter = Counter()
+    for message in session.messages:
         if message.role == "assistant" and message.tool_calls:
-            counts = Counter(tc.name for tc in message.tool_calls)
-            return [
-                {"name": tool_name, "count": count}
-                for tool_name, count in sorted(counts.items())
-            ]
-    return None
+            all_counts.update(tc.name for tc in message.tool_calls)
+    if not all_counts:
+        return None
+    return [
+        {"name": tool_name, "count": count}
+        for tool_name, count in sorted(all_counts.items())
+    ]
 
 
 def _get_or_create_session(

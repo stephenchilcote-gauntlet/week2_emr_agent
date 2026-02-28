@@ -337,7 +337,9 @@ class SidebarApp {
     this.refreshContext()
     const globals = (window.top || window).openemrAgentContext || {}
     return {
-      patient_id: this.state.patientID,
+      // Always coerce to string — the Knockout view model returns numeric pids
+      // but the agent API schema requires patient_id to be a string.
+      patient_id: this.state.patientID != null ? String(this.state.patientID) : null,
       encounter_id: this.state.encounterID,
       page_type: globals.active_tab || globals.active_tab_title || null,
       visible_data: {
