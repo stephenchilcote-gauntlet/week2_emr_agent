@@ -417,7 +417,12 @@ class SidebarApp {
 
   async loadSessionList() {
     try {
-      const sessions = await this.api("/api/sessions")
+      const params = new URLSearchParams()
+      if (this.state.patientID) {
+        params.set("patient_id", this.state.patientID)
+      }
+      const qs = params.toString()
+      const sessions = await this.api(`/api/sessions${qs ? "?" + qs : ""}`)
       this.state.sessions = sessions
       this.renderHistoryList()
     } catch (error) {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
+from uuid import uuid4
 
 import anthropic
 from fastapi.testclient import TestClient
@@ -86,6 +87,7 @@ def test_sessions_are_user_scoped() -> None:
             headers=_headers("u-2"),
         )
 
+        # No patient_id → returns sessions with no patient context
         own = client.get("/api/sessions", headers=_headers("u-1")).json()
     assert forbidden.status_code == 403
     assert len(own) >= 1
@@ -156,6 +158,80 @@ def test_chat_returns_grouped_tool_summary() -> None:
         {"name": "fhir_read", "count": 2},
         {"name": "get_page_context", "count": 1},
     ]
+
+
+def test_sessions_scoped_by_patient_id() -> None:
+    """Sessions for patient A must NOT appear when listing for patient B.
+    This is the core medical-data isolation guarantee."""
+    uid = f"u-scope-{uuid4().hex[:8]}"
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+
+        # Create a session for patient 5
+        client.post(
+            "/api/chat",
+            headers=_headers(uid),
+            json={"message": "patient 5 note", "page_context": {"patient_id": "5"}},
+        )
+
+        # Create a session for patient 7
+        client.post(
+            "/api/chat",
+            headers=_headers(uid),
+            json={"message": "patient 7 note", "page_context": {"patient_id": "7"}},
+        )
+
+        # Create a session with no patient
+        client.post(
+            "/api/chat",
+            headers=_headers(uid),
+            json={"message": "general question"},
+        )
+
+        p5 = client.get("/api/sessions?patient_id=5", headers=_headers(uid)).json()
+        p7 = client.get("/api/sessions?patient_id=7", headers=_headers(uid)).json()
+        no_patient = client.get("/api/sessions", headers=_headers(uid)).json()
+
+    assert len(p5) == 1
+    assert p5[0]["patient_id"] == "5"
+
+    assert len(p7) == 1
+    assert p7[0]["patient_id"] == "7"
+
+    assert len(no_patient) == 1
+    assert no_patient[0]["patient_id"] is None
+
+
+def test_sessions_patient_isolation_across_users() -> None:
+    """Even with matching patient_id, sessions are still user-scoped."""
+    alice = f"doc-alice-{uuid4().hex[:8]}"
+    bob = f"doc-bob-{uuid4().hex[:8]}"
+    pid = f"pat-{uuid4().hex[:8]}"
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+
+        client.post(
+            "/api/chat",
+            headers=_headers(alice),
+            json={"message": "alice note", "page_context": {"patient_id": pid}},
+        )
+
+        client.post(
+            "/api/chat",
+            headers=_headers(bob),
+            json={"message": "bob note", "page_context": {"patient_id": pid}},
+        )
+
+        alice_sessions = client.get(
+            f"/api/sessions?patient_id={pid}", headers=_headers(alice),
+        ).json()
+        bob_sessions = client.get(
+            f"/api/sessions?patient_id={pid}", headers=_headers(bob),
+        ).json()
+
+    assert len(alice_sessions) == 1
+    assert len(bob_sessions) == 1
+    assert alice_sessions[0]["session_id"] != bob_sessions[0]["session_id"]
 
 
 def test_sessions_include_patient_context_metadata() -> None:

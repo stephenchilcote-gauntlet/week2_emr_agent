@@ -281,10 +281,22 @@ async def create_session(
 
 @app.get("/api/sessions")
 async def list_sessions(
+    patient_id: str | None = None,
     user_id: str = Depends(_require_user_id),
 ) -> list[dict[str, Any]]:
-    sessions = app.state.session_store.list_for_user(user_id)
+    sessions = app.state.session_store.list_for_user(user_id, patient_id=patient_id)
     return [_session_summary(session) for session in sessions]
+
+
+@app.delete("/api/sessions/{session_id}", status_code=204)
+async def delete_session(
+    session_id: str,
+    user_id: str = Depends(_require_user_id),
+) -> None:
+    session_store: SessionStore = app.state.session_store
+    session = _get_session(session_id, user_id, session_store)
+    session_store.delete(session.id)
+    _ephemeral_sessions.pop(session_id, None)
 
 
 @app.get("/api/sessions/{session_id}/messages")
