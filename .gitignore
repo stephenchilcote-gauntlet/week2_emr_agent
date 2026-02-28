@@ -18,3 +18,4 @@ openemr/
 data/
 *.bak
 web/dojo/screenshots/
+.claude/worktrees/
