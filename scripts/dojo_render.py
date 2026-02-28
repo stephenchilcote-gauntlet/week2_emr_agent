@@ -121,6 +121,11 @@ def main():
         default=OUTPUT_DIR,
         help=f"Output directory (default: {OUTPUT_DIR})",
     )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Don't auto-open browser (just print the URL)",
+    )
     args = parser.parse_args()
 
     if args.serve:
@@ -128,7 +133,8 @@ def main():
         url = f"http://127.0.0.1:{PORT}/dojo/index.html"
         print(f"Serving dojo at {url}")
         print("Ctrl+C to stop")
-        webbrowser.open(url)
+        if not args.no_open:
+            webbrowser.open(url)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
