@@ -272,13 +272,11 @@ def test_fetch_jaeger_traces_connection_error() -> None:
     assert result == []
 
 
-def test_main_end_to_end(tmp_path: Path, capsys) -> None:
-    db = tmp_path / "sessions.db"
-    _seed_db(db, "test-session-123", SESSION_PAYLOAD)
-
-    with patch("scripts.session_trace._fetch_jaeger_traces", return_value=[JAEGER_TRACE]):
-        with patch("sys.argv", ["session_trace", "test-session-123", "--db-path", str(db)]):
-            main()
+def test_main_end_to_end(capsys) -> None:
+    with patch("scripts.session_trace._load_session_from_api", return_value=SESSION_PAYLOAD):
+        with patch("scripts.session_trace._fetch_jaeger_traces", return_value=[JAEGER_TRACE]):
+            with patch("sys.argv", ["session_trace", "test-session-123"]):
+                main()
 
     output = capsys.readouterr().out
     assert "# Session Trace: `test-session-123`" in output
@@ -289,37 +287,33 @@ def test_main_end_to_end(tmp_path: Path, capsys) -> None:
     assert "POST /api/chat" in output
 
 
-def test_main_db_only(tmp_path: Path, capsys) -> None:
-    db = tmp_path / "sessions.db"
-    _seed_db(db, "sess-db", {"id": "sess-db", "phase": "planning", "messages": []})
+def test_main_db_only(capsys) -> None:
+    payload = {"id": "sess-db", "phase": "planning", "messages": []}
 
-    with patch("scripts.session_trace._fetch_jaeger_traces", return_value=[]):
-        with patch("sys.argv", ["session_trace", "sess-db", "--db-path", str(db)]):
-            main()
+    with patch("scripts.session_trace._load_session_from_api", return_value=payload):
+        with patch("scripts.session_trace._fetch_jaeger_traces", return_value=[]):
+            with patch("sys.argv", ["session_trace", "sess-db"]):
+                main()
 
     output = capsys.readouterr().out
     assert "No traces found in Jaeger" in output
 
 
-def test_main_jaeger_only(tmp_path: Path, capsys) -> None:
-    db = tmp_path / "sessions.db"
-    _seed_db(db, "other", {"id": "other"})
-
-    with patch("scripts.session_trace._fetch_jaeger_traces", return_value=[JAEGER_TRACE]):
-        with patch("sys.argv", ["session_trace", "missing-id", "--db-path", str(db)]):
-            main()
+def test_main_jaeger_only(capsys) -> None:
+    with patch("scripts.session_trace._load_session_from_api", return_value=None):
+        with patch("scripts.session_trace._fetch_jaeger_traces", return_value=[JAEGER_TRACE]):
+            with patch("sys.argv", ["session_trace", "missing-id"]):
+                main()
 
     output = capsys.readouterr().out
     assert "not found in database" in output
     assert "Jaeger Traces" in output
 
 
-def test_main_no_data(tmp_path: Path) -> None:
-    db = tmp_path / "sessions.db"
-    _seed_db(db, "other", {"id": "other"})
-
-    with patch("scripts.session_trace._fetch_jaeger_traces", return_value=[]):
-        with patch("sys.argv", ["session_trace", "ghost", "--db-path", str(db)]):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-            assert exc_info.value.code == 1
+def test_main_no_data() -> None:
+    with patch("scripts.session_trace._load_session_from_api", return_value=None):
+        with patch("scripts.session_trace._fetch_jaeger_traces", return_value=[]):
+            with patch("sys.argv", ["session_trace", "ghost"]):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 1
