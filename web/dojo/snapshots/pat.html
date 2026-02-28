@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Patient Summary — Dojo Snapshot</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
+  <style>
+    body { background: hsl(0 0% 90%) !important; margin: 0; padding: 0; }
+    section { background: var(--white); margin-top: .25em; padding: .25em; }
+    .card { box-shadow: 1px 1px 1px hsl(0 0% 0% / .2); border-radius: 0; }
+  </style>
+</head>
+<body class="mt-1 patient-demographic bg-light">
+  <div id="container_div" class="container-xl mb-2">
+
+    <!-- Patient banner (simplified) -->
+    <div class="row mb-2 p-2" style="background:#fff;border-bottom:1px solid #dee2e6;">
+      <div class="col">
+        <strong>Doe, Jane</strong> &middot; DOB: 1985-03-15 &middot; PID: 1
+      </div>
+    </div>
+
+    <div class="main mb-1">
+      <!-- ═══ PAMI Row ═══ -->
+      <div class="row">
+
+        <!-- ── Medical Problems ── -->
+        <div class="p-1 col-md-4">
+          <section class="flex-fill mx-1 card">
+            <div class="card-body p-1">
+              <h6 class="card-title mb-0 d-flex p-1 justify-content-between">
+                <a class="text-left font-weight-bolder" href="#"
+                   data-toggle="collapse" data-target="#medical_problem_ps_expand"
+                   aria-expanded="true" aria-controls="medical_problem_ps_expand">
+                  Medical Problems
+                  <i class="ml-1 fa fa-fw fa-compress" data-target="#medical_problem_ps_expand"></i>
+                </a>
+                <span>
+                  <a class="btn btn-sm" href="#"><i class="fa fa-plus">&nbsp;</i></a>
+                </span>
+              </h6>
+              <div id="medical_problem_ps_expand" class="card-text collapse show">
+                <div class="clearfix pt-2">
+                  <div class="list-group list-group-flush pami-list">
+                    <div class="list-group-item py-1 px-1" data-uuid="a1b2c3d4-e5f6-7890-abcd-ef1234567890">
+                      Essential Hypertension (I10)
+                    </div>
+                    <div class="list-group-item py-1 px-1" data-uuid="b2c3d4e5-f6a7-8901-bcde-f12345678901">
+                      Type 2 Diabetes Mellitus (E11.9)
+                    </div>
+                    <div class="list-group-item py-1 px-1" data-uuid="c3d4e5f6-a7b8-9012-cdef-123456789012">
+                      Major Depressive Disorder, Recurrent (F33.0)
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- ── Allergies ── -->
+        <div class="p-1 col-md-4">
+          <section class="flex-fill mx-1 card">
+            <div class="card-body p-1">
+              <h6 class="card-title mb-0 d-flex p-1 justify-content-between">
+                <a class="text-left font-weight-bolder" href="#"
+                   data-toggle="collapse" data-target="#allergy_ps_expand"
+                   aria-expanded="true" aria-controls="allergy_ps_expand">
+                  Allergies
+                  <i class="ml-1 fa fa-fw fa-compress" data-target="#allergy_ps_expand"></i>
+                </a>
+                <span>
+                  <a class="btn btn-sm" href="#"><i class="fa fa-plus">&nbsp;</i></a>
+                </span>
+              </h6>
+              <div id="allergy_ps_expand" class="card-text collapse show">
+                <div class="clearfix pt-2">
+                  <div class="list-group list-group-flush pami-list">
+                    <div class="list-group-item p-1" data-uuid="d4e5f6a7-b8c9-0123-defa-234567890123">
+                      <div class="d-flex w-100 justify-content-between">
+                        <div class="flex-fill" title="Penicillin V Reaction: Hives - severe">
+                          Penicillin V (<span class="bg-warning font-weight-bold px-1">severe</span>)
+                        </div>
+                      </div>
+                    </div>
+                    <div class="list-group-item p-1" data-uuid="e5f6a7b8-c9d0-1234-efab-345678901234">
+                      <div class="d-flex w-100 justify-content-between">
+                        <div class="flex-fill" title="Sulfonamides Reaction: Rash - mild">
+                          Sulfonamides (mild)
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- ── Medications ── -->
+        <div class="p-1 col-md-4">
+          <section class="flex-fill mx-1 card">
+            <div class="card-body p-1">
+              <h6 class="card-title mb-0 d-flex p-1 justify-content-between">
+                <a class="text-left font-weight-bolder" href="#"
+                   data-toggle="collapse" data-target="#medication_ps_expand"
+                   aria-expanded="true" aria-controls="medication_ps_expand">
+                  Medications
+                  <i class="ml-1 fa fa-fw fa-compress" data-target="#medication_ps_expand"></i>
+                </a>
+                <span>
+                  <a class="btn btn-sm" href="#"><i class="fa fa-plus">&nbsp;</i></a>
+                </span>
+              </h6>
+              <div id="medication_ps_expand" class="card-text collapse show">
+                <div class="clearfix pt-2">
+                  <div class="list-group list-group-flush pami-list">
+                    <div class="list-group-item p-0 pl-1" data-uuid="f6a7b8c9-d0e1-2345-fabc-456789012345">
+                      <span class="font-weight-normal">Lisinopril</span>
+                      <span>10mg oral daily</span>
+                    </div>
+                    <div class="list-group-item p-0 pl-1" data-uuid="a7b8c9d0-e1f2-3456-abcd-567890123456">
+                      <span class="font-weight-normal">Metformin</span>
+                      <span>500mg oral twice daily</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+      </div><!-- /PAMI row -->
+
+      <!-- ═══ Vitals card (AJAX-loaded stub) ═══ -->
+      <div class="row">
+        <div class="col-md-8 px-2">
+          <section class="card">
+            <div class="card-body p-1">
+              <h6 class="card-title mb-0 d-flex p-1 justify-content-between">
+                <a class="text-left font-weight-bolder" href="#"
+                   data-toggle="collapse" data-target="#vitals_ps_expand"
+                   aria-expanded="true" aria-controls="vitals_ps_expand">
+                  Vitals
+                  <i class="ml-1 fa fa-fw fa-compress" data-target="#vitals_ps_expand"></i>
+                </a>
+              </h6>
+              <div id="vitals_ps_expand" class="card-text collapse show">
+                <div class="clearfix pt-2">
+                  <div id="vitals">
+                    <span class="text"><b>Most recent vitals from: 2026-02-25</b></span>
+                    <br/><br/>
+                    <table class="table table-sm">
+                      <tr><td>BP</td><td>128/82 mmHg</td></tr>
+                      <tr><td>Pulse</td><td>72 bpm</td></tr>
+                      <tr><td>Temp</td><td>98.6 °F</td></tr>
+                      <tr><td>Weight</td><td>185 lbs</td></tr>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+    </div><!-- /main -->
+  </div><!-- /container_div -->
+
+  <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

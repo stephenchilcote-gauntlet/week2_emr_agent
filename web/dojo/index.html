@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Overlay Dojo — OpenEMR Dev Harness</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #1e293b; color: #e2e8f0; display: flex; height: 100vh; }
+
+    /* ── Left: Control Panel ── */
+    #control-panel {
+      width: 380px; min-width: 380px; background: #0f172a; border-right: 1px solid #334155;
+      display: flex; flex-direction: column; overflow-y: auto;
+    }
+    #control-panel h1 { font-size: 16px; padding: 12px 16px; border-bottom: 1px solid #334155; color: #38bdf8; }
+    .section { padding: 12px 16px; border-bottom: 1px solid #1e293b; }
+    .section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 8px; }
+    .section p { font-size: 12px; color: #64748b; margin-bottom: 6px; line-height: 1.4; }
+
+    label { font-size: 12px; color: #94a3b8; display: block; margin-bottom: 2px; }
+    select, input[type="text"], textarea {
+      width: 100%; padding: 6px 8px; background: #1e293b; border: 1px solid #334155;
+      border-radius: 4px; color: #e2e8f0; font-size: 12px; font-family: ui-monospace, monospace;
+      margin-bottom: 8px;
+    }
+    textarea { min-height: 80px; resize: vertical; }
+
+    .btn-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+    button {
+      padding: 6px 12px; border: 1px solid #334155; border-radius: 4px; background: #1e293b;
+      color: #e2e8f0; font-size: 12px; cursor: pointer; transition: background 0.15s;
+    }
+    button:hover { background: #334155; }
+    button.primary { background: #0f766e; border-color: #0f766e; color: #fff; }
+    button.primary:hover { background: #0d9488; }
+    button.danger { background: #991b1b; border-color: #991b1b; color: #fff; }
+    button.danger:hover { background: #b91c1c; }
+    button.warn { background: #92400e; border-color: #92400e; color: #fff; }
+    button.warn:hover { background: #a16207; }
+
+    /* ── Manifest list ── */
+    .manifest-list { display: flex; flex-direction: column; gap: 2px; }
+    .manifest-btn {
+      display: flex; align-items: center; gap: 8px; width: 100%;
+      padding: 6px 10px; border: 1px solid #1e293b; border-radius: 4px;
+      background: #0f172a; color: #e2e8f0; font-size: 12px; cursor: pointer;
+      text-align: left; transition: all 0.15s;
+    }
+    .manifest-btn:hover { background: #1e293b; border-color: #334155; }
+    .manifest-btn .m-num {
+      font-size: 10px; font-weight: 700; color: #475569;
+      width: 20px; text-align: right; flex-shrink: 0;
+    }
+    .manifest-btn .m-icon { font-size: 13px; flex-shrink: 0; }
+    .manifest-btn .m-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .manifest-btn .m-tag {
+      font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px;
+      text-transform: uppercase; letter-spacing: 0.03em; flex-shrink: 0;
+    }
+    .m-tag.create { background: #065f46; color: #6ee7b7; }
+    .m-tag.update { background: #1e3a5f; color: #7dd3fc; }
+    .m-tag.delete { background: #7f1d1d; color: #fca5a5; }
+    .m-tag.batch  { background: #4c1d95; color: #c4b5fd; }
+    .m-tag.edge   { background: #713f12; color: #fcd34d; }
+
+    /* ── Right: Frame area ── */
+    #frame-area { flex: 1; display: flex; flex-direction: column; }
+    #tab-bar {
+      display: flex; gap: 0; background: #0f172a; border-bottom: 1px solid #334155;
+      padding: 0 8px; flex-shrink: 0;
+    }
+    .tab-btn {
+      padding: 8px 20px; border: none; border-bottom: 2px solid transparent; background: transparent;
+      color: #94a3b8; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+    }
+    .tab-btn:hover { color: #e2e8f0; }
+    .tab-btn.active { color: #38bdf8; border-bottom-color: #38bdf8; }
+
+    #frame-container { flex: 1; position: relative; }
+    #frame-container iframe {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0; background: #fff;
+    }
+
+    /* ── Log ── */
+    #log-area {
+      height: 140px; min-height: 80px; background: #020617; border-top: 1px solid #334155;
+      overflow-y: auto; padding: 6px 12px; font-family: ui-monospace, monospace; font-size: 11px;
+      color: #94a3b8; flex-shrink: 0;
+    }
+    #log-area .log-entry { padding: 1px 0; border-bottom: 1px solid #0f172a; }
+    #log-area .log-time { color: #475569; margin-right: 8px; }
+    #log-area .log-type { font-weight: 600; margin-right: 6px; }
+    .log-type.sent { color: #38bdf8; }
+    .log-type.recv { color: #34d399; }
+    .log-type.info { color: #fbbf24; }
+    .log-type.error { color: #f87171; }
+  </style>
+</head>
+<body>
+
+  <!-- ═══ Control Panel ═══ -->
+  <div id="control-panel">
+    <h1>🥋 Overlay Dojo</h1>
+
+    <!-- Dev cycle hint -->
+    <div class="section">
+      <h2>Dev Cycle</h2>
+      <p>
+        <b>1.</b> Edit <code>overlay.js</code> &nbsp;
+        <b>2.</b> Ctrl+R &nbsp;
+        <b>3.</b> Click a manifest &nbsp;
+        <b>4.</b> Inspect result
+      </p>
+      <div class="btn-row">
+        <button class="danger" onclick="Dojo.clearOverlays()">Clear Overlays</button>
+        <button class="warn" onclick="Dojo.resetIframes()">Reset Iframes</button>
+      </div>
+    </div>
+
+    <!-- Context -->
+    <div class="section">
+      <h2>Patient Context</h2>
+      <label>PID</label>
+      <input type="text" id="ctx-pid" value="1" style="width:80px;display:inline-block;" />
+      <label>Name</label>
+      <input type="text" id="ctx-pname" value="Doe, Jane" />
+      <label>Encounter</label>
+      <input type="text" id="ctx-encounter" value="1" style="width:80px;display:inline-block;" />
+      <button onclick="Dojo.updateContext()" style="margin-top:4px;">Update Context</button>
+    </div>
+
+    <!-- ═══ 15 Manifests ═══ -->
+    <div class="section">
+      <h2>Manifest Library (15)</h2>
+      <p>Each exercises a distinct overlay.js code path. Hover for details.</p>
+      <div class="manifest-list" id="manifest-list"></div>
+    </div>
+
+    <!-- Custom message -->
+    <div class="section">
+      <h2>Custom Message</h2>
+      <textarea id="custom-msg">{
+  "type": "overlay:apply",
+  "item": {
+    "id": "custom-1",
+    "resource_type": "Condition",
+    "action": "create",
+    "description": "Custom test",
+    "proposed_value": {
+      "code_text": "Anxiety Disorder",
+      "code": "F41.9"
+    }
+  }
+}</textarea>
+      <div class="btn-row">
+        <button class="primary" onclick="Dojo.sendCustom()">Send Message</button>
+      </div>
+    </div>
+
+    <!-- Snapshot management -->
+    <div class="section">
+      <h2>Snapshots</h2>
+      <p>Load HTML captured from live OpenEMR via <code>capture.js</code></p>
+      <label>Patient tab (pat)</label>
+      <input type="file" id="snap-pat" accept=".html" onchange="Dojo.loadSnapshot('pat', this)" style="font-size:11px;" />
+      <label style="margin-top:6px;">Encounter tab (enc)</label>
+      <input type="file" id="snap-enc" accept=".html" onchange="Dojo.loadSnapshot('enc', this)" style="font-size:11px;" />
+    </div>
+  </div>
+
+  <!-- ═══ Frame Area ═══ -->
+  <div id="frame-area">
+    <div id="tab-bar">
+      <button class="tab-btn active" onclick="Dojo.switchTab('pat')">Patient (pat)</button>
+      <button class="tab-btn" onclick="Dojo.switchTab('enc')">Encounter (enc)</button>
+    </div>
+    <div id="frame-container">
+      <iframe name="pat" src="snapshots/pat.html"></iframe>
+      <iframe name="enc" src="snapshots/enc.html" style="display:none;"></iframe>
+    </div>
+    <div id="log-area">
+      <div class="log-entry"><span class="log-time">--:--:--</span><span class="log-type info">INFO</span> Overlay Dojo ready. Click a manifest to test.</div>
+    </div>
+  </div>
+
+  <!-- Load overlay.js (the code under test) -->
+  <script src="../sidebar/overlay.js"></script>
+
+  <script>
+  ;(function () {
+    // ── Stub OpenEMR globals that overlay.js expects ──
+
+    window.webroot_url = ""
+
+    function observable(initialValue) {
+      var _value = initialValue
+      var fn = function (newVal) {
+        if (arguments.length === 0) return _value
+        _value = newVal
+        return fn
+      }
+      return fn
+    }
+
+    function observableArray(initialArray) {
+      var _arr = initialArray || []
+      var fn = function (newArr) {
+        if (arguments.length === 0) return _arr
+        _arr = newArr
+        return fn
+      }
+      fn.push = function (item) { _arr.push(item) }
+      fn.remove = function (item) { _arr = _arr.filter(function (x) { return x !== item }) }
+      return fn
+    }
+
+    var patientModel = {
+      pid: observable("1"),
+      pname: observable("Doe, Jane"),
+      pubpid: observable("PUB001"),
+      str_dob: observable("1985-03-15"),
+      selectedEncounterID: observable("1"),
+      encounterArray: observableArray([]),
+    }
+
+    function createTabStatus(name, title, url, isVisible, isLocked) {
+      return {
+        name: observable(name), title: observable(title), url: observable(url),
+        visible: observable(isVisible), locked: observable(isLocked),
+        isCurrent: observable(isVisible), loading: observable(false),
+        loading_label: observable(""), closable: observable(true),
+      }
+    }
+
+    var tabsList = observableArray([
+      createTabStatus("pat", "Patient Dashboard", "/interface/patient_file/summary/demographics.php", true, false),
+      createTabStatus("enc", "Encounter", "/interface/encounter/encounter_top.php", false, false),
+    ])
+
+    window.app_view_model = {
+      application_data: {
+        patient: observable(patientModel),
+        tabs: { tabsList: tabsList },
+      },
+    }
+
+    window.left_nav = {
+      setPatient: function (pname, pid, pubpid, frname, str_dob) {
+        patientModel.pname(pname); patientModel.pid(pid)
+        patientModel.pubpid(pubpid); patientModel.str_dob(str_dob)
+        Dojo.log("info", "left_nav.setPatient(" + pname + ", " + pid + ")")
+      },
+    }
+
+    window.navigateTab = function (url, name, afterLoadFunction) {
+      Dojo.log("info", "navigateTab(" + name + ") → " + url.substring(0, 60))
+      Dojo.switchTab(name)
+      if (typeof afterLoadFunction === "function") setTimeout(afterLoadFunction, 100)
+    }
+
+    window.activateTabByName = function (name, hideOthers) {
+      Dojo.log("info", "activateTabByName(" + name + ", hideOthers=" + hideOthers + ")")
+      Dojo.switchTab(name)
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // MANIFEST LIBRARY — 15 scenarios covering every overlay.js path
+    // ══════════════════════════════════════════════════════════════
+    //
+    // Snapshot UUIDs (from pat.html):
+    //   Conditions:
+    //     a1b2c3d4-... Essential Hypertension (I10)
+    //     b2c3d4e5-... Type 2 Diabetes Mellitus (E11.9)
+    //     c3d4e5f6-... Major Depressive Disorder, Recurrent (F33.0)
+    //   Allergies:
+    //     d4e5f6a7-... Penicillin V (severe)
+    //     e5f6a7b8-... Sulfonamides (mild)
+    //   Medications:
+    //     f6a7b8c9-... Lisinopril 10mg oral daily
+    //     a7b8c9d0-... Metformin 500mg oral twice daily
+
+    var MANIFESTS = [
+
+      // ── CREATES: exercise each buildDisplayTitle branch ──
+
+      { // 1
+        label: "Create Condition (code_text+code)",
+        tag: "create",
+        icon: "🏥",
+        tooltip: "Exercises: applyCreateOverlay, buildDisplayTitle via code_text+code → 'Title (CODE)' format, ghost row insertion, scrollIntoView",
+        message: { type: "overlay:apply", item: {
+          id: "m1", resource_type: "Condition", action: "create",
+          description: "Add anxiety disorder",
+          proposed_value: { code_text: "Generalized Anxiety Disorder", code: "F41.1" },
+        }},
+      },
+
+      { // 2
+        label: "Create Allergy (title, no code)",
+        tag: "create",
+        icon: "⚠️",
+        tooltip: "Exercises: buildDisplayTitle via pv.title path (no code appended), allergy list-group insertion",
+        message: { type: "overlay:apply", item: {
+          id: "m2", resource_type: "AllergyIntolerance", action: "create",
+          description: "Add latex allergy",
+          proposed_value: { title: "Latex" },
+        }},
+      },
+
+      { // 3
+        label: "Create Medication (drug combo)",
+        tag: "create",
+        icon: "💊",
+        tooltip: "Exercises: buildDisplayTitle via drug+dose+route+freq composition path",
+        message: { type: "overlay:apply", item: {
+          id: "m3", resource_type: "MedicationRequest", action: "create",
+          description: "Add statin",
+          proposed_value: { drug: "Atorvastatin", dose: "40mg", route: "oral", freq: "daily at bedtime" },
+        }},
+      },
+
+      { // 4
+        label: "Create Condition (description fallback)",
+        tag: "create",
+        icon: "📝",
+        tooltip: "Exercises: buildDisplayTitle fallback — proposed_value has no code_text/title/display/drug, falls back to item.description",
+        message: { type: "overlay:apply", item: {
+          id: "m4", resource_type: "Condition", action: "create",
+          description: "Chronic lower back pain, unspecified",
+          proposed_value: { onset: "2024-06-15", severity: "moderate" },
+        }},
+      },
+
+      // ── UPDATES: exercise wordDiff + buildProposedRowText branches ──
+
+      { // 5
+        label: "Update Condition (code_text diff)",
+        tag: "update",
+        icon: "✏️",
+        tooltip: "Exercises: applyUpdateOverlay, buildProposedRowText via code_text path, wordDiff with common prefix ('Essential Hypertension' → 'Essential Hypertension, Stage 2')",
+        message: { type: "overlay:apply", item: {
+          id: "m5", resource_type: "Condition", action: "update",
+          description: "Upstage hypertension",
+          target_resource_id: "Condition/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          proposed_value: { code_text: "Essential Hypertension, Stage 2", code: "I10" },
+        }},
+      },
+
+      { // 6
+        label: "Update Med dose only (inherit drug)",
+        tag: "update",
+        icon: "💉",
+        tooltip: "Exercises: buildProposedRowText medication path with dose-only change — drug name inherited from current row text via currentText.split(/\\s+/)[0]",
+        message: { type: "overlay:apply", item: {
+          id: "m6", resource_type: "MedicationRequest", action: "update",
+          description: "Increase Lisinopril dose",
+          target_resource_id: "MedicationRequest/f6a7b8c9-d0e1-2345-fabc-456789012345",
+          proposed_value: { dose: "20mg", route: "oral", freq: "daily" },
+        }},
+      },
+
+      { // 7
+        label: "Update Med multi-field change",
+        tag: "update",
+        icon: "🔄",
+        tooltip: "Exercises: buildProposedRowText with drug+dose+route+freq all specified, wordDiff with multiple changed words in middle of text",
+        message: { type: "overlay:apply", item: {
+          id: "m7", resource_type: "MedicationRequest", action: "update",
+          description: "Change Metformin to XR formulation",
+          target_resource_id: "MedicationRequest/a7b8c9d0-e1f2-3456-abcd-567890123456",
+          proposed_value: { drug: "Metformin XR", dose: "1000mg", route: "oral", freq: "once daily" },
+        }},
+      },
+
+      { // 8
+        label: "Update Allergy (display path)",
+        tag: "update",
+        icon: "🔬",
+        tooltip: "Exercises: applyUpdateOverlay on allergy row (nested div.d-flex structure), buildProposedRowText via pv.display path, wordDiff on allergy text",
+        message: { type: "overlay:apply", item: {
+          id: "m8", resource_type: "AllergyIntolerance", action: "update",
+          description: "Reclassify Penicillin allergy severity",
+          target_resource_id: "AllergyIntolerance/d4e5f6a7-b8c9-0123-defa-234567890123",
+          proposed_value: { display: "Penicillin V — Anaphylaxis Risk" },
+        }},
+      },
+
+      // ── DELETES: exercise applyDeleteOverlay + cleanup ──
+
+      { // 9
+        label: "Delete Condition",
+        tag: "delete",
+        icon: "🗑️",
+        tooltip: "Exercises: applyDeleteOverlay on condition row — strikethrough, opacity, 'Remove' badge, restoreDelete cleanup path",
+        message: { type: "overlay:apply", item: {
+          id: "m9", resource_type: "Condition", action: "delete",
+          description: "Resolve depression diagnosis",
+          target_resource_id: "Condition/c3d4e5f6-a7b8-9012-cdef-123456789012",
+        }},
+      },
+
+      { // 10
+        label: "Delete Medication",
+        tag: "delete",
+        icon: "🚫",
+        tooltip: "Exercises: applyDeleteOverlay on medication row, extractUuid from 'MedicationRequest/uuid' format, action button rendering inside delete overlay",
+        message: { type: "overlay:apply", item: {
+          id: "m10", resource_type: "MedicationRequest", action: "delete",
+          description: "Discontinue Metformin",
+          target_resource_id: "MedicationRequest/a7b8c9d0-e1f2-3456-abcd-567890123456",
+        }},
+      },
+
+      // ── BATCHES: exercise applyAllOverlays + focusIndex + tab switching ──
+
+      { // 11
+        label: "Batch: mixed create+update+delete",
+        tag: "batch",
+        icon: "📦",
+        tooltip: "Exercises: applyAllOverlays with 3 items (one of each action), focusIndex=0, navigateToTab for focused item, clearAllOverlays before apply",
+        message: function (pid) { return {
+          type: "overlay:applyAll", patientID: pid, focusIndex: 0,
+          items: [
+            { id: "m11a", resource_type: "Condition", action: "create", description: "Add GERD",
+              proposed_value: { code_text: "Gastroesophageal Reflux Disease", code: "K21.0" } },
+            { id: "m11b", resource_type: "MedicationRequest", action: "update",
+              description: "Increase Lisinopril",
+              target_resource_id: "MedicationRequest/f6a7b8c9-d0e1-2345-fabc-456789012345",
+              proposed_value: { drug: "Lisinopril", dose: "20mg", route: "oral", freq: "daily" } },
+            { id: "m11c", resource_type: "AllergyIntolerance", action: "delete",
+              description: "Remove Sulfonamides",
+              target_resource_id: "AllergyIntolerance/e5f6a7b8-c9d0-1234-efab-345678901234" },
+          ],
+        }},
+      },
+
+      { // 12
+        label: "Batch: 3 creates across all types",
+        tag: "batch",
+        icon: "📋",
+        tooltip: "Exercises: applyAllOverlays with 3 create items spanning all 3 PAMI types — tests multiple ghost row insertions in one pass, each in different list-group",
+        message: function (pid) { return {
+          type: "overlay:applyAll", patientID: pid, focusIndex: 1,
+          items: [
+            { id: "m12a", resource_type: "Condition", action: "create", description: "Add COPD",
+              proposed_value: { code_text: "Chronic Obstructive Pulmonary Disease", code: "J44.1" } },
+            { id: "m12b", resource_type: "AllergyIntolerance", action: "create", description: "Add iodine allergy",
+              proposed_value: { title: "Iodine Contrast Dye", code: "V07.39" } },
+            { id: "m12c", resource_type: "MedicationRequest", action: "create", description: "Add albuterol",
+              proposed_value: { drug: "Albuterol", dose: "90mcg", route: "inhaled", freq: "PRN" } },
+          ],
+        }},
+      },
+
+      { // 13
+        label: "Batch: 5-item full workup (focus=2)",
+        tag: "batch",
+        icon: "🔥",
+        tooltip: "Exercises: large applyAllOverlays (5 items), focusIndex=2 (middle item focused), tests tour navigation, mix of all resource types and actions, clearAllOverlays cleanup of many elements",
+        message: function (pid) { return {
+          type: "overlay:applyAll", patientID: pid, focusIndex: 2,
+          items: [
+            { id: "m13a", resource_type: "Condition", action: "create", description: "Add CKD",
+              proposed_value: { code_text: "Chronic Kidney Disease, Stage 3", code: "N18.3" } },
+            { id: "m13b", resource_type: "AllergyIntolerance", action: "delete",
+              description: "Remove Sulfonamides (tolerance developed)",
+              target_resource_id: "AllergyIntolerance/e5f6a7b8-c9d0-1234-efab-345678901234" },
+            { id: "m13c", resource_type: "MedicationRequest", action: "update",
+              description: "Titrate Lisinopril up",
+              target_resource_id: "MedicationRequest/f6a7b8c9-d0e1-2345-fabc-456789012345",
+              proposed_value: { drug: "Lisinopril", dose: "40mg", route: "oral", freq: "daily" } },
+            { id: "m13d", resource_type: "Condition", action: "update",
+              description: "Refine diabetes diagnosis",
+              target_resource_id: "Condition/b2c3d4e5-f6a7-8901-bcde-f12345678901",
+              proposed_value: { code_text: "Type 2 Diabetes Mellitus with Chronic Kidney Disease", code: "E11.22" } },
+            { id: "m13e", resource_type: "MedicationRequest", action: "create",
+              description: "Add ACE inhibitor renal protection",
+              proposed_value: { drug: "Losartan", dose: "50mg", route: "oral", freq: "daily" } },
+          ],
+        }},
+      },
+
+      // ── EDGE CASES: exercise error paths + boundary conditions ──
+
+      { // 14
+        label: "Sidebar-only (Encounter create)",
+        tag: "edge",
+        icon: "🚧",
+        tooltip: "Exercises: applySingleOverlay returns {applied:false, reason:'sidebar-only'} for resource types with supportsRowTarget=false — verifies no DOM mutation attempted",
+        message: { type: "overlay:apply", item: {
+          id: "m14", resource_type: "Encounter", action: "create",
+          description: "New follow-up encounter",
+          proposed_value: { title: "Follow-up Visit", display: "30-min office visit" },
+        }},
+      },
+
+      { // 15
+        label: "Update with bad UUID (error path)",
+        tag: "edge",
+        icon: "💥",
+        tooltip: "Exercises: applyUpdateOverlay error path — findRowByUuid returns null, result is {applied:false, reason:'Row not found for UUID ...'}, no DOM mutation",
+        message: { type: "overlay:apply", item: {
+          id: "m15", resource_type: "Condition", action: "update",
+          description: "Target a UUID that doesn't exist in snapshot",
+          target_resource_id: "Condition/00000000-0000-0000-0000-000000000000",
+          proposed_value: { code_text: "This should not render", code: "Z99.9" },
+        }},
+      },
+    ]
+
+    // ── Dojo controller ──
+
+    window.Dojo = {
+      log: function (type, message) {
+        var area = document.getElementById("log-area")
+        var entry = document.createElement("div")
+        entry.className = "log-entry"
+        var now = new Date()
+        var time = [now.getHours(), now.getMinutes(), now.getSeconds()]
+          .map(function (n) { return String(n).padStart(2, "0") }).join(":")
+        entry.innerHTML =
+          '<span class="log-time">' + time + "</span>" +
+          '<span class="log-type ' + type + '">' + type.toUpperCase() + "</span> " +
+          message
+        area.appendChild(entry)
+        area.scrollTop = area.scrollHeight
+      },
+
+      switchTab: function (name) {
+        var patFrame = document.querySelector("iframe[name='pat']")
+        var encFrame = document.querySelector("iframe[name='enc']")
+        var tabs = document.querySelectorAll(".tab-btn")
+
+        if (name === "pat") {
+          patFrame.style.display = ""; encFrame.style.display = "none"
+          tabs[0].classList.add("active"); tabs[1].classList.remove("active")
+        } else {
+          patFrame.style.display = "none"; encFrame.style.display = ""
+          tabs[0].classList.remove("active"); tabs[1].classList.add("active")
+        }
+
+        var allTabs = tabsList()
+        for (var i = 0; i < allTabs.length; i++) {
+          allTabs[i].visible(allTabs[i].name() === name)
+        }
+      },
+
+      updateContext: function () {
+        var pid = document.getElementById("ctx-pid").value
+        var pname = document.getElementById("ctx-pname").value
+        var enc = document.getElementById("ctx-encounter").value
+        patientModel.pid(pid); patientModel.pname(pname)
+        patientModel.selectedEncounterID(enc)
+        this.log("info", "Context → pid=" + pid + " name=" + pname + " enc=" + enc)
+      },
+
+      sendMessage: function (msg) {
+        this.log("sent", "<code>" + JSON.stringify(msg).substring(0, 200) + "</code>")
+        window.postMessage(msg, "*")
+      },
+
+      clearOverlays: function () {
+        this.sendMessage({ type: "overlay:clear" })
+      },
+
+      resetIframes: function () {
+        this.clearOverlays()
+        document.querySelector("iframe[name='pat']").src = "snapshots/pat.html"
+        document.querySelector("iframe[name='enc']").src = "snapshots/enc.html"
+        this.log("info", "Iframes reloaded from snapshots (hard reset)")
+      },
+
+      sendCustom: function () {
+        try {
+          var msg = JSON.parse(document.getElementById("custom-msg").value)
+          this.sendMessage(msg)
+        } catch (e) {
+          this.log("error", "Invalid JSON: " + e.message)
+        }
+      },
+
+      loadSnapshot: function (tabName, input) {
+        if (!input.files || !input.files[0]) return
+        var file = input.files[0]
+        var reader = new FileReader()
+        var self = this
+        reader.onload = function () {
+          var frame = document.querySelector("iframe[name='" + tabName + "']")
+          var blob = new Blob([reader.result], { type: "text/html" })
+          frame.src = URL.createObjectURL(blob)
+          self.log("info", "Loaded snapshot " + tabName + ": " + file.name)
+        }
+        reader.readAsText(file)
+      },
+
+      fireManifest: function (index) {
+        var m = MANIFESTS[index]
+        if (!m) return
+        var msg = typeof m.message === "function"
+          ? m.message(document.getElementById("ctx-pid").value)
+          : m.message
+        this.log("info", "━━ Manifest #" + (index + 1) + ": " + m.label + " ━━")
+        this.sendMessage(msg)
+      },
+    }
+
+    // ── Build manifest button list ──
+    var listEl = document.getElementById("manifest-list")
+    for (var i = 0; i < MANIFESTS.length; i++) {
+      var m = MANIFESTS[i]
+      var btn = document.createElement("button")
+      btn.className = "manifest-btn"
+      btn.title = m.tooltip
+      btn.innerHTML =
+        '<span class="m-num">' + (i + 1) + '</span>' +
+        '<span class="m-icon">' + m.icon + '</span>' +
+        '<span class="m-label">' + m.label + '</span>' +
+        '<span class="m-tag ' + m.tag + '">' + m.tag + '</span>'
+      ;(function (idx) {
+        btn.addEventListener("click", function () { Dojo.fireManifest(idx) })
+      })(i)
+      listEl.appendChild(btn)
+    }
+
+    // ── Listen for overlay responses ──
+    window.addEventListener("message", function (event) {
+      if (!event.data || typeof event.data.type !== "string") return
+      if (!event.data.type.startsWith("overlay:")) return
+      // Skip our own outbound messages
+      if (event.data.type === "overlay:apply" || event.data.type === "overlay:applyAll" || event.data.type === "overlay:clear") return
+      Dojo.log("recv", "<code>" + JSON.stringify(event.data).substring(0, 300) + "</code>")
+    })
+  })()
+  </script>
+</body>
+</html>

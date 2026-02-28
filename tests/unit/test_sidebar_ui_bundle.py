@@ -36,7 +36,6 @@ def test_sidebar_js_has_tour_mode() -> None:
     assert "tourNavigate" in js
     assert "renderTourCard" in js
     assert "postOverlayMessage" in js
-    assert "isInPageResource" in js
 
 
 def test_sidebar_html_has_tour_navigation() -> None:
@@ -49,7 +48,7 @@ def test_sidebar_html_has_tour_navigation() -> None:
 def test_embed_js_injects_sidebar_frame() -> None:
     js = _read("web/sidebar/embed.js")
     assert "openemr-clinical-assistant-sidebar" in js
-    assert "/agent-api/ui" in js
+    assert "/interface/modules/custom_modules/oe-module-clinical-assistant/public/sidebar_frame.php" in js
 
 
 def test_embed_js_loads_overlay_script() -> None:
@@ -103,4 +102,4 @@ def test_sidebar_css_has_tour_and_confidence_styles() -> None:
     assert ".confidence-badge" in css
     assert ".review-card-action-icon" in css
     assert ".review-card-description" in css
-    assert ".review-card-sidebar-note" in css
+

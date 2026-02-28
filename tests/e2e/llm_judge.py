@@ -103,7 +103,12 @@ class LLMJudge:
                 messages=[{"role": "user", "content": user_content}],
             )
             text = resp.content[0].text
-            data = json.loads(text)
+            # Strip markdown code fences if present (haiku sometimes wraps JSON)
+            if text.startswith("```"):
+                text = "\n".join(text.split("\n")[1:])
+            if text.endswith("```"):
+                text = text[: text.rfind("```")]
+            data = json.loads(text.strip())
             return JudgeResult(
                 question=question,
                 passed=bool(data["passed"]),

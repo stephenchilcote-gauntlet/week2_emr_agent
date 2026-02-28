@@ -157,6 +157,42 @@ docker compose down -v && docker compose up -d --build
   its reasoning tokens consume the token budget (empty content with `finish_reason: length`
   at lower values).
 
+## Encounter Page DOM Structure
+
+### Iframe Hierarchy
+```
+top window (main.php)
+  └─ iframe[name="enc"]  →  encounter_top.php?set_encounter=X
+       └─ iframe[name="enc-forms"]  →  forms.php  (Summary tab)
+       └─ iframe[name="enctabs-N"]  →  load_form.php / view_form.php (dynamic tabs)
+```
+
+### Key Selectors (forms.php)
+- `#encounter_forms` — main container
+- `#partable` — all forms list
+- `.form-holder` with `id="{formdir}~{form_id}"` (e.g., `soap~42`)
+- `.form-header` > `.form_header h5` — form name
+- `.form-detail .collapse` (`#divid_N`) — expandable content
+- `.form-edit-button.btn-edit` — edit buttons
+- `#navbarEncounterTitle` — encounter title bar
+- No `data-uuid` attributes (unlike patient summary)
+
+### Encounter Navigation
+URL: `encounter_top.php?set_encounter={id}` → `navigateTab(url, "enc")` → `activateTabByName("enc")`
+
+### vs Patient Summary
+- Patient summary uses Bootstrap cards (`#medical_problem_ps_expand` etc.) with `data-uuid` rows
+- Encounter uses flat `.form-holder` list with sequential `#divid_N` collapses
+- Encounter has inner TabsWrapper tab system; patient summary is direct content
+
+### overlay.js: Encounter resources (Encounter, SoapNote, Observation, etc.) have `supportsRowTarget: false` — overlays not yet implemented for enc tab.
+
+## Module Script Injection
+- **Working mechanism:** `ob_start()` output buffer in `openemr.bootstrap.php` injects `<script>` before `</body>` on every page
+- **Broken mechanism:** `StyleFilterEvent` in `Bootstrap.php` — raw `<script>` tag gets mangled into `<link href="...">` by `Header::createElement()`
+- `embed.js` only runs in `window.top` (iframe guard prevents recursion)
+- Bootstrap loaded via `ModulesApplication::loadCustomModule()` which `include`s `openemr.bootstrap.php`
+
 ## Known Issues
 
 - OpenEMR flex startup is slow (~3-4 min) — agent will fail FHIR calls during this window

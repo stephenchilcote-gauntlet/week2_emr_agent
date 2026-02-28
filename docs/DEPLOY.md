@@ -17,10 +17,38 @@
 # Register OAuth on an already-running stack:
 MYSQL_PASSWORD=<mysql-pw> ./scripts/register-oauth.sh 77.42.17.207
 
+# Verify a running deployment (read-only, safe to run any time):
+./scripts/verify-deployment.sh 77.42.17.207
+
+# Pre-deploy validation only (checks .env.prod without deploying):
+./scripts/preflight-check.sh 77.42.17.207
+
 # SSH tunnels for internal services:
 ssh -L 8000:localhost:8000 root@77.42.17.207   # Agent API
 ssh -L 16686:localhost:16686 root@77.42.17.207  # Jaeger UI
 ```
+
+## Deployment Safety Net
+
+`deploy.sh` now automatically runs two checks:
+
+1. **Preflight** (`preflight-check.sh`) — runs BEFORE deploying:
+   - Validates `.env.prod` has all required vars
+   - Ensures `OPENEMR_PASS=pass` (the #1 cause of `invalid_grant`)
+   - Prevents overwriting working OAuth creds on the server
+   - Blocks deploy on failure (bypass with `SKIP_PREFLIGHT=1`)
+
+2. **Verification** (`verify-deployment.sh`) — runs AFTER deploying:
+   - MySQL connectivity
+   - REST/FHIR API globals enabled
+   - OAuth client registered + `is_enabled=1`
+   - Token acquisition (end-to-end OAuth proof)
+   - Agent health + `openemr_connected: true`
+   - Sidebar module registered
+   - Apache proxy + inter-container connectivity
+   - TLS certificates present
+
+Both can be run standalone at any time.
 
 ## Architecture
 

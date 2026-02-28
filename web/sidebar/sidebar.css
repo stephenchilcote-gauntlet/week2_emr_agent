@@ -747,13 +747,6 @@ body {
   color: var(--text);
 }
 
-.review-card-sidebar-note {
-  font-size: 11px;
-  color: var(--text-faint);
-  font-style: italic;
-  margin-top: 4px;
-}
-
 .review-card-section {
   margin-top: 8px;
 }

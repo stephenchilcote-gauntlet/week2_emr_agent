@@ -61,6 +61,23 @@ fi
 # deployed source files.  Catches accidental 172.x.x.x or 192.168.x.x IPs
 # that coding agents sometimes introduce.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Pre-deploy: preflight-check validates .env.prod before we touch the server.
+# Catches Hall of Fame bugs #1 (wrong password) and #4 (.env overwrite).
+# ---------------------------------------------------------------------------
+echo "=== Pre-deploy: preflight check ==="
+PREFLIGHT_FLAG=""
+[ "$FRESH" = true ] && PREFLIGHT_FLAG="--fresh"
+if ! "$(dirname "$0")/preflight-check.sh" "$HOST" $PREFLIGHT_FLAG; then
+  echo ""
+  echo "Preflight check FAILED. Fix the issues above before deploying."
+  echo "If you're sure, re-run with SKIP_PREFLIGHT=1 to bypass."
+  if [ "${SKIP_PREFLIGHT:-0}" != "1" ]; then
+    exit 1
+  fi
+  echo "SKIP_PREFLIGHT=1 set — continuing anyway."
+fi
+
 echo "=== Pre-deploy: checking for hardcoded URLs ==="
 BAD_PATTERNS='(https?://172\.[0-9]+\.[0-9]+\.[0-9]+|https?://192\.168\.[0-9]+\.[0-9]+|https?://10\.[0-9]+\.[0-9]+\.[0-9]+)'
 # Only scan files that end up inside containers (src/, web/, openemr module PHP)
@@ -165,6 +182,13 @@ if [ "$FRESH" = true ]; then
   scp "$SERVER:$REMOTE_DIR/.env" .env.prod
   echo "Updated .env.prod with OAuth credentials."
 fi
+
+# ---------------------------------------------------------------------------
+# Post-deploy: verify the entire stack
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Post-deploy: verifying deployment ==="
+"$(dirname "$0")/verify-deployment.sh" "$HOST" || true
 
 echo ""
 echo "=== Deploy complete ==="

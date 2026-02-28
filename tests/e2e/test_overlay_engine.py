@@ -187,18 +187,19 @@ class TestTabNavigation:
         calls = overlay_page.evaluate("() => window._tabNavCalls")
         assert calls[-1]["tabName"] == "pat"
 
-    def test_no_tab_navigation_for_unsupported_resource(self, overlay_page: Page) -> None:
-        """Encounter has supportsRowTarget=false, so applyOverlay returns
-        sidebar-only without navigating."""
+    def test_encounter_resource_attempts_overlay(self, overlay_page: Page) -> None:
+        """Encounter resources attempt overlay rendering (no sidebar-only short-circuit)."""
         overlay_page.evaluate("() => { window._tabNavCalls = []; }")
         result = overlay_page.evaluate("""(item) => {
             return window.__overlayEngine.applyOverlay(item);
         }""", ENCOUNTER_CREATE_ITEM)
 
-        assert result["applied"] is False
-        assert result["reason"] == "sidebar-only"
+        # Container is null so create overlay can't find it, but it should NOT
+        # return "sidebar-only" — it attempts the overlay and fails for a
+        # legitimate reason (container not found).
+        assert result["reason"] != "sidebar-only"
         calls = overlay_page.evaluate("() => window._tabNavCalls")
-        assert len(calls) == 0
+        assert len(calls) >= 1
 
     def test_navigate_to_tab_exposed_on_engine(self, overlay_page: Page) -> None:
         """navigateToTab should be available on __overlayEngine."""
@@ -512,18 +513,20 @@ class TestApplyAllOverlays:
         assert results[1]["applied"] is True
         assert results[2]["itemId"] == "item-enc-create"
         assert results[2]["applied"] is False
-        assert results[2]["reason"] == "sidebar-only"
+        # Container is null so it fails, but NOT with "sidebar-only"
+        assert results[2]["reason"] != "sidebar-only"
 
-    def test_apply_all_skips_unsupported_resources(
+    def test_apply_all_encounter_attempts_overlay(
         self, overlay_page: Page,
     ) -> None:
-        """Encounter items don't get overlaid but don't break the batch."""
+        """Encounter items attempt overlay (no sidebar-only skip) but fail gracefully when container is null."""
         results = overlay_page.evaluate("""(items) => {
             return window.__overlayEngine.applyAllOverlays(items);
         }""", [ENCOUNTER_CREATE_ITEM])
 
         assert len(results) == 1
         assert results[0]["applied"] is False
+        assert results[0]["reason"] != "sidebar-only"
 
     def test_apply_all_navigates_to_tab(self, overlay_page: Page) -> None:
         """Tab navigation fires for items in the batch."""

@@ -50,15 +50,21 @@ def _load_eval_dataset() -> list[dict]:
 
 def openemr_login(page: Page, url: str = OPENEMR_URL) -> None:
     """Log into OpenEMR and wait for the main UI to load."""
-    page.goto(url)
+    # Use domcontentloaded to avoid waiting for external CDN scripts (marked.js)
+    # loaded by sidebar_frame.php, which can block the "load" event.
+    page.goto(url, wait_until="domcontentloaded")
     page.fill("#authUser", OPENEMR_USER)
     page.fill("#clearPass", OPENEMR_PASS)
-    page.click("#login-button")
-    page.wait_for_load_state("networkidle")
-    # Wait for the Knockout app_view_model to be available
+    # Wait for navigation after login form submission
+    with page.expect_navigation(wait_until="domcontentloaded", timeout=30000):
+        page.click("#login-button")
+    # Wait for the Knockout app_view_model (left_nav) to be available.
+    # This is the reliable indicator that OpenEMR's main UI is ready.
+    # Do NOT use wait_for_load_state("networkidle") — the sidebar makes
+    # continuous proxy API calls that prevent networkidle from ever firing.
     page.wait_for_function(
         "() => !!(window.top || window).left_nav",
-        timeout=15000,
+        timeout=30000,
     )
 
 
@@ -104,26 +110,31 @@ def select_patient(
                 }}
             }}"""
         )
-    # Give the sidebar's 2-second context poll time to pick it up
-    page.wait_for_timeout(3000)
-    # Directly set the encounter on openemrAgentContext as a fallback —
-    # embed.js polls every 2s and may not read the Knockout observable
-    # if selectedEncounterID was never initialised by the OpenEMR UI.
-    if encounter_id:
-        page.evaluate(
-            f"""() => {{
-                const top = window.top || window;
-                if (top.openemrAgentContext) {{
-                    top.openemrAgentContext.encounter = {json.dumps(encounter_id)};
-                }}
-            }}"""
-        )
+    # Directly write openemrAgentContext so the sidebar doesn't need to wait
+    # for embed.js's next 2-second poll cycle.
+    page.evaluate(
+        f"""() => {{
+            const top = window.top || window;
+            if (!top.openemrAgentContext) {{ top.openemrAgentContext = {{}}; }}
+            top.openemrAgentContext.pid = {pid};
+            top.openemrAgentContext.patient_name = {json.dumps(name)};
+            {f'top.openemrAgentContext.encounter = {json.dumps(encounter_id)};' if encounter_id else ''}
+        }}"""
+    )
+    # Brief pause for the sidebar iframe to read the updated context
+    page.wait_for_timeout(500)
 
 
 def get_sidebar_frame(page: Page) -> Frame:
     """Return the sidebar iframe's Frame object from the OpenEMR page."""
+    # Wait for the embed.js to inject the iframe (it fires on DOMContentLoaded)
+    page.wait_for_timeout(2000)
     for frame in page.frames:
-        if "clinical-assistant" in frame.url or "sidebar" in frame.url:
+        if (
+            "clinical-assistant" in frame.url
+            or "sidebar" in frame.url
+            or "agent-api" in frame.url
+        ):
             frame.wait_for_selector("#chat-input", state="visible", timeout=15000)
             return frame
     raise RuntimeError("Sidebar iframe not found in OpenEMR page")
@@ -166,15 +177,19 @@ def inject_patient_context(
 def send_chat_message(target: Page | Frame, message: str) -> None:
     """Type a message and click Send, then wait for the assistant reply."""
     existing_count = target.locator(".message.role-assistant").count()
+    existing_error_count = target.locator(".error-block").count()
 
     target.locator("#chat-input").fill(message)
-    target.locator("#send-button").click()
+    # Use dispatch_event instead of click() to bypass Playwright's pointer-event
+    # hit-testing, which fails for fixed-position iframes ("iframe intercepts
+    # pointer events" error).
+    target.locator("#send-button").dispatch_event("click")
 
     target.wait_for_function(
         f"""() => {{
             const assistants = document.querySelectorAll('.message.role-assistant');
             const errors = document.querySelectorAll('.error-block');
-            return assistants.length > {existing_count} || errors.length > 0;
+            return assistants.length > {existing_count} || errors.length > {existing_error_count};
         }}""",
         timeout=E2E_TIMEOUT_MS,
     )

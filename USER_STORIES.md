@@ -297,13 +297,13 @@ The sidebar JS maps resource types to OpenEMR pages and DOM selectors. This mapp
 | Condition | `demographics.php` | `pat` | `#medical_problem_ps_expand` | `.list-group-item` |
 | MedicationRequest | `demographics.php` | `pat` | `#medication_ps_expand` | `.list-group-item` |
 | AllergyIntolerance | `demographics.php` | `pat` | `#allergy_ps_expand` | `.list-group-item` |
-| Encounter | Encounter list | `enc` | — | Sidebar-only (double-nested iframe) |
-| Observation | Clinical data section | `enc` | — | Sidebar-only (double-nested iframe) |
-| DocumentReference | — | — | — | Sidebar-only |
-| CarePlan | — | — | — | Sidebar-only |
-| Other | — | — | — | Sidebar-only |
+| Encounter | Encounter list | `enc` | — | Overlay attempted (container TBD) |
+| Observation | Clinical data section | `enc` | — | Overlay attempted (container TBD) |
+| DocumentReference | — | — | — | Overlay attempted (container TBD) |
+| CarePlan | — | — | — | Overlay attempted (container TBD) |
+| Other | — | — | — | Overlay attempted (container TBD) |
 
-Resource types without a dashboard card use sidebar-only review — the full details appear in the sidebar review card with a note: "Cannot preview in-page — review details here."
+All resource types attempt overlay rendering. Resource types without a container selector yet will fail gracefully (container not found) but are never short-circuited.
 
 ### OpenEMR Frame Architecture & DOM Access
 
@@ -331,7 +331,7 @@ const rows = patDoc.querySelectorAll('#medical_problem_ps_expand .list-group-ite
 
 All iframes are same-origin (the sidebar, OpenEMR, and agent API all run behind the same host). No CORS or cross-origin restrictions apply.
 
-**Encounter-scoped resources** (Observation, Procedure, DiagnosticReport) live inside the `enc` iframe, which itself contains a nested iframe for `forms.php`. This double nesting makes DOM injection fragile. These resource types use **sidebar-only review** — the sidebar review card shows the full proposed value, but no in-page overlay is injected.
+**Encounter-scoped resources** (Observation, Procedure, DiagnosticReport) live inside the `enc` iframe, which itself contains a nested iframe for `forms.php`. This double nesting makes DOM injection more complex. These resource types still attempt overlay rendering; container selectors are TBD.
 
 ### Overlay Targeting: How the Sidebar Finds the Right Row
 
@@ -397,7 +397,7 @@ The sidebar never leaves stale overlay elements in the DOM.
 
 ### `#stats_div` Async Loading
 
-On `demographics.php`, the `#stats_div` area (which may contain additional PAMI cards) is loaded asynchronously via `placeHtml("stats.php", "stats_div")` after `DOMContentLoaded`. The three primary PAMI cards (allergies, medical problems, medications) are rendered server-side and available immediately. If a manifest item targets a resource type whose card is inside `#stats_div`, the sidebar JS uses a `MutationObserver` on `#stats_div` to wait for content before attempting row matching. Timeout: 5 seconds; if the content doesn't load, fall back to sidebar-only review.
+On `demographics.php`, the `#stats_div` area (which may contain additional PAMI cards) is loaded asynchronously via `placeHtml("stats.php", "stats_div")` after `DOMContentLoaded`. The three primary PAMI cards (allergies, medical problems, medications) are rendered server-side and available immediately. If a manifest item targets a resource type whose card is inside `#stats_div`, the sidebar JS uses a `MutationObserver` on `#stats_div` to wait for content before attempting row matching. Timeout: 5 seconds; if the content doesn't load, the overlay reports container not found.
 
 ### Safety During Review
 
