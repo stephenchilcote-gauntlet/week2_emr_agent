@@ -7,6 +7,7 @@ from src.agent.translator import (
     can_rest_write,
     dsl_item_to_proposed_value,
     get_rest_endpoint,
+    needs_encounter,
     to_openemr_rest,
     uses_pid,
 )
@@ -15,6 +16,7 @@ PATIENT_UUID = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
 ENCOUNTER_FHIR_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 MEDREQ_FHIR_UUID = "dddddddd-2222-3333-4444-555555555555"
 CONDITION_FHIR_UUID = "cccccccc-1111-2222-3333-444444444444"
+ENCOUNTER_UUID = "eeeeeeee-1111-2222-3333-444444444444"
 
 
 def _make_item(**overrides) -> DslItem:
@@ -264,3 +266,140 @@ class TestDslItemToProposedValue:
         item = _make_item(action="edit", ref=None, attrs={"dose": "500mg"})
         result = dsl_item_to_proposed_value(item)
         assert "ref" not in result
+
+
+# ---- 8. SoapNote → OpenEMR REST ----
+
+class TestSoapNoteRest:
+    def test_basic_soap_note(self):
+        item = _make_item(
+            resource_type="SoapNote",
+            description="Visit note",
+            attrs={
+                "subjective": "Patient reports headache",
+                "objective": "BP 120/80",
+                "assessment": "Tension headache",
+                "plan": "OTC analgesics",
+            },
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["subjective"] == "Patient reports headache"
+        assert result["objective"] == "BP 120/80"
+        assert result["assessment"] == "Tension headache"
+        assert result["plan"] == "OTC analgesics"
+
+    def test_missing_fields_default_to_empty(self):
+        item = _make_item(
+            resource_type="SoapNote",
+            description="Partial note",
+            attrs={"subjective": "Cough for 3 days"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["subjective"] == "Cough for 3 days"
+        assert result["objective"] == ""
+        assert result["assessment"] == ""
+        assert result["plan"] == ""
+
+
+# ---- 9. Vital → OpenEMR REST ----
+
+class TestVitalRest:
+    def test_basic_vitals(self):
+        item = _make_item(
+            resource_type="Vital",
+            description="Record vitals",
+            attrs={"bps": "120", "bpd": "80", "pulse": "72"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["bps"] == "120"
+        assert result["bpd"] == "80"
+        assert result["pulse"] == "72"
+
+    def test_missing_fields_omitted(self):
+        item = _make_item(
+            resource_type="Vital",
+            description="Weight only",
+            attrs={"weight": "75"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["weight"] == "75"
+        assert "bps" not in result
+        assert "height" not in result
+        assert "temperature" not in result
+
+    def test_all_vital_fields(self):
+        all_fields = {
+            "bps": "120", "bpd": "80", "weight": "75", "height": "170",
+            "temperature": "98.6", "temp_method": "oral", "pulse": "72",
+            "respiration": "16", "note": "Normal", "waist_circ": "32",
+            "head_circ": "22", "oxygen_saturation": "99",
+        }
+        item = _make_item(
+            resource_type="Vital",
+            description="Full vitals",
+            attrs=all_fields,
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        for key, val in all_fields.items():
+            assert result[key] == val
+
+    def test_empty_attrs_returns_empty_dict(self):
+        item = _make_item(resource_type="Vital", description="No data", attrs={})
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result == {}
+
+
+# ---- 10. needs_encounter ----
+
+class TestNeedsEncounter:
+    def test_soap_note_needs_encounter(self):
+        assert needs_encounter("SoapNote") is True
+
+    def test_vital_needs_encounter(self):
+        assert needs_encounter("Vital") is True
+
+    def test_condition_no_encounter(self):
+        assert needs_encounter("Condition") is False
+
+    def test_medication_no_encounter(self):
+        assert needs_encounter("MedicationRequest") is False
+
+
+# ---- 11. can_rest_write / uses_pid for SoapNote & Vital ----
+
+class TestSoapNoteVitalFlags:
+    def test_soap_note_can_rest_write(self):
+        assert can_rest_write("SoapNote") is True
+
+    def test_vital_can_rest_write(self):
+        assert can_rest_write("Vital") is True
+
+    def test_soap_note_uses_pid(self):
+        assert uses_pid("SoapNote") is True
+
+    def test_vital_uses_pid(self):
+        assert uses_pid("Vital") is True
+
+
+# ---- 12. get_rest_endpoint for encounter-scoped types ----
+
+class TestEncounterScopedEndpoints:
+    def test_soap_note_endpoint(self):
+        item = _make_item(resource_type="SoapNote")
+        endpoint = get_rest_endpoint(item, PATIENT_UUID, encounter_id=ENCOUNTER_UUID)
+        assert endpoint == f"patient/{PATIENT_UUID}/encounter/{ENCOUNTER_UUID}/soap_note"
+
+    def test_vital_endpoint(self):
+        item = _make_item(resource_type="Vital")
+        endpoint = get_rest_endpoint(item, PATIENT_UUID, encounter_id=ENCOUNTER_UUID)
+        assert endpoint == f"patient/{PATIENT_UUID}/encounter/{ENCOUNTER_UUID}/vital"
+
+    def test_soap_note_missing_encounter_raises(self):
+        item = _make_item(resource_type="SoapNote")
+        with pytest.raises(ValueError, match="requires an encounter_id"):
+            get_rest_endpoint(item, PATIENT_UUID)
+
+    def test_vital_missing_encounter_raises(self):
+        item = _make_item(resource_type="Vital")
+        with pytest.raises(ValueError, match="requires an encounter_id"):
+            get_rest_endpoint(item, PATIENT_UUID)
