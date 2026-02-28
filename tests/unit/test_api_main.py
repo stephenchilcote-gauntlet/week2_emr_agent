@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
+import anthropic
 from fastapi.testclient import TestClient
 
 from src.agent.labels import uuid_to_words
@@ -286,6 +287,160 @@ def test_chat_skips_patient_lookup_when_fhir_id_already_set() -> None:
 
     assert resp2.status_code == 200
     fhir_read_mock.assert_not_awaited()
+
+
+def test_health_check_returns_ok_when_connected() -> None:
+    with TestClient(app) as client:
+        client.app.state.openemr_client = SimpleNamespace(
+            get_fhir_metadata=AsyncMock(return_value={"resourceType": "CapabilityStatement"}),
+        )
+        response = client.get("/api/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "healthy"
+    assert body["openemr_connected"] is True
+    assert body["openemr_status"] == "ok"
+
+
+def test_health_check_returns_error_when_metadata_has_error() -> None:
+    with TestClient(app) as client:
+        client.app.state.openemr_client = SimpleNamespace(
+            get_fhir_metadata=AsyncMock(return_value={"error": "unauthorized"}),
+        )
+        response = client.get("/api/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "healthy"
+    assert body["openemr_connected"] is False
+    assert body["openemr_status"] == "error"
+
+
+def test_health_check_returns_error_when_metadata_raises() -> None:
+    with TestClient(app) as client:
+        client.app.state.openemr_client = SimpleNamespace(
+            get_fhir_metadata=AsyncMock(side_effect=RuntimeError("connection refused")),
+        )
+        response = client.get("/api/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["openemr_connected"] is False
+    assert body["openemr_status"] == "error"
+
+
+def test_get_manifest_returns_manifest_when_present() -> None:
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-mf")).json()
+        session = client.app.state.session_store.load(created["session_id"])
+        assert session is not None
+        session.manifest = ChangeManifest(
+            patient_id=PATIENT_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="item-1",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "E11.9"},
+                    source_reference="Encounter/abc",
+                    description="Test",
+                )
+            ],
+        )
+        client.app.state.session_store.save(session)
+
+        response = client.get(
+            f"/api/manifest/{session.id}",
+            headers=_headers("u-mf"),
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_id"] == session.id
+    assert body["manifest"] is not None
+    assert len(body["manifest"]["items"]) == 1
+
+
+def test_get_manifest_returns_null_when_no_manifest() -> None:
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-mf2")).json()
+
+        response = client.get(
+            f"/api/manifest/{created['session_id']}",
+            headers=_headers("u-mf2"),
+        )
+    assert response.status_code == 200
+    assert response.json()["manifest"] is None
+
+
+def test_get_manifest_forbidden_for_wrong_user() -> None:
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-own")).json()
+
+        response = client.get(
+            f"/api/manifest/{created['session_id']}",
+            headers=_headers("u-other"),
+        )
+    assert response.status_code == 403
+
+
+def test_get_session_audit_returns_events() -> None:
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-aud")).json()
+        sid = created["session_id"]
+
+        # Chat to generate audit events
+        client.post(
+            "/api/chat",
+            headers=_headers("u-aud"),
+            json={"session_id": sid, "message": "hi"},
+        )
+
+        response = client.get(
+            f"/api/sessions/{sid}/audit",
+            headers=_headers("u-aud"),
+        )
+    assert response.status_code == 200
+    events = response.json()
+    assert isinstance(events, list)
+    assert len(events) >= 1
+    assert all("event_type" in e for e in events)
+
+
+def test_get_session_audit_empty_for_new_session() -> None:
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-aud2")).json()
+
+        response = client.get(
+            f"/api/sessions/{created['session_id']}/audit",
+            headers=_headers("u-aud2"),
+        )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_chat_returns_502_on_llm_api_error() -> None:
+    import httpx
+
+    class _ErrorAgentLoop:
+        async def run(self, session, user_message):
+            raise anthropic.APIStatusError(
+                message="overloaded",
+                response=httpx.Response(529, request=httpx.Request("POST", "https://api.anthropic.com")),
+                body=None,
+            )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        client.app.state.agent_loop = _ErrorAgentLoop()
+        response = client.post(
+            "/api/chat",
+            headers=_headers("u-err"),
+            json={"message": "hello"},
+        )
+    assert response.status_code == 502
+    assert "LLM API error" in response.json()["detail"]
 
 
 def test_chat_handles_empty_patient_search_gracefully() -> None:

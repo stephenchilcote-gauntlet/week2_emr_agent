@@ -3,11 +3,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import json
+
 import pytest
 
 from src.agent.labels import uuid_to_words
 from src.agent import loop as loop_module
-from src.agent.loop import AgentLoop
+from src.agent.loop import AgentLoop, MAX_TOOL_RESULT_CHARS
 from src.agent.models import AgentSession, PageContext, ToolCall
 
 
@@ -392,3 +394,64 @@ async def test_fhir_read_no_params_does_not_crash() -> None:
         resource_type="Patient",
         params=None,
     )
+
+
+# ------------------------------------------------------------------
+# _truncate_tool_content tests
+# ------------------------------------------------------------------
+
+
+def test_truncate_tool_content_passthrough_under_limit() -> None:
+    content = "short content"
+    assert AgentLoop._truncate_tool_content(content) == content
+
+
+def test_truncate_tool_content_passthrough_at_exact_limit() -> None:
+    content = "x" * MAX_TOOL_RESULT_CHARS
+    assert AgentLoop._truncate_tool_content(content) == content
+
+
+def test_truncate_tool_content_non_json_over_limit() -> None:
+    content = "a" * (MAX_TOOL_RESULT_CHARS + 500)
+    result = AgentLoop._truncate_tool_content(content)
+    assert result.endswith("\n… (truncated)")
+    assert len(result) == MAX_TOOL_RESULT_CHARS + len("\n… (truncated)")
+
+
+def test_truncate_tool_content_invalid_json_over_limit() -> None:
+    content = "{not valid json" + "x" * MAX_TOOL_RESULT_CHARS
+    result = AgentLoop._truncate_tool_content(content)
+    assert result.endswith("\n… (truncated)")
+
+
+def test_truncate_tool_content_fhir_bundle_trims_entries() -> None:
+    """A FHIR bundle with many entries should be trimmed via binary search,
+    producing valid JSON with _truncated metadata."""
+    single_entry = {"resource": {"resourceType": "Condition", "id": "x" * 200}}
+    bundle = {
+        "resourceType": "Bundle",
+        "total": 1000,
+        "entry": [single_entry] * 1000,
+    }
+    content = json.dumps(bundle)
+    assert len(content) > MAX_TOOL_RESULT_CHARS
+
+    result = AgentLoop._truncate_tool_content(content)
+    # Result is much smaller than original (binary search trims entries);
+    # _truncated metadata adds slight overhead beyond MAX_TOOL_RESULT_CHARS.
+    assert len(result) < len(content)
+
+    parsed = json.loads(result)
+    assert "_truncated" in parsed
+    assert parsed["_truncated"]["total_entries"] == 1000
+    assert parsed["_truncated"]["returned_entries"] < 1000
+    assert parsed["_truncated"]["returned_entries"] > 0
+    assert len(parsed["entry"]) == parsed["_truncated"]["returned_entries"]
+
+
+def test_truncate_tool_content_json_dict_without_entry_key() -> None:
+    """JSON dicts without 'entry' key should get plain truncation."""
+    data = {"big_field": "z" * (MAX_TOOL_RESULT_CHARS + 100)}
+    content = json.dumps(data)
+    result = AgentLoop._truncate_tool_content(content)
+    assert result.endswith("\n… (truncated)")
