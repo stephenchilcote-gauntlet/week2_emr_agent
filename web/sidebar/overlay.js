@@ -19,7 +19,7 @@
       supportsRowTarget: true,
     },
     Encounter: { tab: "enc", container: ".table.jumbotron", navigateUrl: "/interface/patient_file/history/encounters.php", supportsRowTarget: true },
-    Observation: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
+    Observation: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
     Vital: { tab: "pat", container: "#vitals_ps_expand", supportsRowTarget: true },
     SoapNote: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
     Procedure: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
@@ -281,6 +281,9 @@
     }
     if (item.resource_type === "Procedure") {
       return applyCreateOverlayProcedure(item, mapping, isFocused)
+    }
+    if (item.resource_type === "Observation") {
+      return applyCreateOverlayObservation(item, mapping, isFocused)
     }
 
     var frameDoc = getFrameDocumentForMapping(mapping)
@@ -689,6 +692,35 @@
     if (pv.note) fields.push({ label: "Notes", value: pv.note })
 
     var ghost = buildFormHolderGhost(frameDoc, item, isFocused, "Procedure", fields)
+
+    container.insertBefore(ghost, container.firstChild)
+    injectedElements.push({ element: ghost, frameDoc: frameDoc })
+    if (isFocused) scrollIntoView(ghost)
+    return { applied: true }
+  }
+
+  function applyCreateOverlayObservation(item, mapping, isFocused) {
+    var frameDoc = getFrameDocumentForMapping(mapping)
+    if (!frameDoc) return { applied: false, reason: "Frame not available" }
+
+    var container = frameDoc.querySelector("#partable")
+    if (!container) return { applied: false, reason: "Container #partable not found" }
+
+    var pv = item.proposed_value || {}
+    var fields = []
+    if (pv.code_text) {
+      fields.push({ label: "Test", value: pv.code_text })
+      if (pv.display) fields.push({ label: "Result", value: pv.display })
+    } else if (pv.display) {
+      fields.push({ label: "Test", value: pv.display })
+    }
+    if (pv.code) fields.push({ label: "Code", value: pv.code })
+    if (pv.value) fields.push({ label: "Value", value: pv.value })
+    if (pv.unit) fields.push({ label: "Unit", value: pv.unit })
+    if (pv.date) fields.push({ label: "Date", value: pv.date })
+    if (pv.interpretation) fields.push({ label: "Interpretation", value: pv.interpretation })
+
+    var ghost = buildFormHolderGhost(frameDoc, item, isFocused, "Observation", fields)
 
     container.insertBefore(ghost, container.firstChild)
     injectedElements.push({ element: ghost, frameDoc: frameDoc })

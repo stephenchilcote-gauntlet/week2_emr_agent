@@ -971,7 +971,7 @@ class SidebarApp {
   }
 
   isInPageResource(resourceType) {
-    const supported = ["Condition", "AllergyIntolerance", "MedicationRequest", "Encounter", "SoapNote", "Procedure"]
+    const supported = ["Condition", "AllergyIntolerance", "MedicationRequest", "Encounter", "SoapNote", "Procedure", "Observation"]
     return supported.includes(resourceType)
   }
 
