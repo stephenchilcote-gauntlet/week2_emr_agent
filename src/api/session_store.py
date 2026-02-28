@@ -82,13 +82,14 @@ class SessionStore:
             )
         self._cache[session.id] = session
 
-    def load(self, session_id: str) -> AgentSession | None:
-        if session_id in self._cache:
-            return self._cache[session_id]
+    def load(self, session_id: str, user_id: str) -> AgentSession | None:
+        cached = self._cache.get(session_id)
+        if cached is not None:
+            return cached if cached.openemr_user_id == user_id else None
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT payload FROM sessions WHERE id = ?",
-                (session_id,),
+                "SELECT payload FROM sessions WHERE id = ? AND openemr_user_id = ?",
+                (session_id, user_id),
             ).fetchone()
         if row is None:
             return None
@@ -123,9 +124,12 @@ class SessionStore:
             self._cache[session.id] = session
         return sessions
 
-    def delete(self, session_id: str) -> None:
+    def delete(self, session_id: str, user_id: str) -> None:
         with self._connect() as conn:
-            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.execute(
+                "DELETE FROM sessions WHERE id = ? AND openemr_user_id = ?",
+                (session_id, user_id),
+            )
         self._cache.pop(session_id, None)
 
     @staticmethod

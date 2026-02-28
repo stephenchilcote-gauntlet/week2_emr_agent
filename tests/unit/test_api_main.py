@@ -89,7 +89,8 @@ def test_sessions_are_user_scoped() -> None:
 
         # No patient_id → returns sessions with no patient context
         own = client.get("/api/sessions", headers=_headers("u-1")).json()
-    assert forbidden.status_code == 403
+    # DB-level scoping: wrong user sees 404, not 403 (no info leakage)
+    assert forbidden.status_code == 404
     assert len(own) >= 1
     assert all(session["session_id"] for session in own)
 
@@ -135,7 +136,7 @@ def test_approve_applies_modified_items() -> None:
             },
         )
 
-        updated = client.app.state.session_store.load(session.id)
+        updated = client.app.state.session_store.load(session.id, "u-1")
     assert response.status_code == 200
     assert updated is not None
     assert updated.manifest is not None
@@ -325,7 +326,7 @@ def test_chat_sets_fhir_patient_id() -> None:
         assert resp.status_code == 200
 
         session_id = resp.json()["session_id"]
-        session = client.app.state.session_store.load(session_id)
+        session = client.app.state.session_store.load(session_id, "u-label")
 
     assert session is not None
     assert session.fhir_patient_id == PATIENT_FHIR_UUID
@@ -462,7 +463,8 @@ def test_get_manifest_forbidden_for_wrong_user() -> None:
             f"/api/manifest/{created['session_id']}",
             headers=_headers("u-other"),
         )
-    assert response.status_code == 403
+    # DB-level scoping: wrong user sees 404 (session doesn't exist for them)
+    assert response.status_code == 404
 
 
 def test_get_session_audit_returns_events() -> None:
@@ -545,7 +547,7 @@ def test_chat_handles_empty_patient_search_gracefully() -> None:
         assert resp.status_code == 200
 
         session_id = resp.json()["session_id"]
-        session = client.app.state.session_store.load(session_id)
+        session = client.app.state.session_store.load(session_id, "u-empty")
 
     assert session is not None
     assert session.fhir_patient_id is None

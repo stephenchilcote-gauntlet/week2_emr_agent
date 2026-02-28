@@ -125,12 +125,13 @@ def _summarize_tool_calls(session: AgentSession) -> list[dict[str, Any]] | None:
 
 def _resolve_session(
     session_id: str,
+    user_id: str,
     session_store: SessionStore,
 ) -> AgentSession | None:
-    session = _ephemeral_sessions.get(session_id)
-    if session is not None:
-        return session
-    return session_store.load(session_id)
+    ephemeral = _ephemeral_sessions.get(session_id)
+    if ephemeral is not None:
+        return ephemeral if ephemeral.openemr_user_id == user_id else None
+    return session_store.load(session_id, user_id)
 
 
 def _get_or_create_session(
@@ -143,11 +144,9 @@ def _get_or_create_session(
         _ephemeral_sessions[session.id] = session
         return session
 
-    session = _resolve_session(session_id, session_store)
+    session = _resolve_session(session_id, user_id, session_store)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.openemr_user_id != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
     return session
 
 
@@ -156,11 +155,9 @@ def _get_session(
     user_id: str,
     session_store: SessionStore,
 ) -> AgentSession:
-    session = _resolve_session(session_id, session_store)
+    session = _resolve_session(session_id, user_id, session_store)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.openemr_user_id != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
     return session
 
 
@@ -294,8 +291,8 @@ async def delete_session(
     user_id: str = Depends(_require_user_id),
 ) -> None:
     session_store: SessionStore = app.state.session_store
-    session = _get_session(session_id, user_id, session_store)
-    session_store.delete(session.id)
+    _get_session(session_id, user_id, session_store)
+    session_store.delete(session_id, user_id)
     _ephemeral_sessions.pop(session_id, None)
 
 
