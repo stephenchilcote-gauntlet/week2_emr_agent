@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Overlay Dojo — OpenEMR Dev Harness</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #1e293b; color: #e2e8f0; display: flex; height: 100vh; }
+
+    /* ── Left: Control Panel ── */
+    #control-panel {
+      width: 380px; min-width: 380px; background: #0f172a; border-right: 1px solid #334155;
+      display: flex; flex-direction: column; overflow-y: auto;
+    }
+    #control-panel h1 { font-size: 16px; padding: 12px 16px; border-bottom: 1px solid #334155; color: #38bdf8; }
+    .section { padding: 12px 16px; border-bottom: 1px solid #1e293b; }
+    .section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 8px; }
+    .section p { font-size: 12px; color: #64748b; margin-bottom: 6px; }
+
+    label { font-size: 12px; color: #94a3b8; display: block; margin-bottom: 2px; }
+    select, input[type="text"], textarea {
+      width: 100%; padding: 6px 8px; background: #1e293b; border: 1px solid #334155;
+      border-radius: 4px; color: #e2e8f0; font-size: 12px; font-family: ui-monospace, monospace;
+      margin-bottom: 8px;
+    }
+    textarea { min-height: 80px; resize: vertical; }
+
+    .btn-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+    button {
+      padding: 6px 12px; border: 1px solid #334155; border-radius: 4px; background: #1e293b;
+      color: #e2e8f0; font-size: 12px; cursor: pointer; transition: background 0.15s;
+    }
+    button:hover { background: #334155; }
+    button.primary { background: #0f766e; border-color: #0f766e; color: #fff; }
+    button.primary:hover { background: #0d9488; }
+    button.danger { background: #991b1b; border-color: #991b1b; color: #fff; }
+    button.danger:hover { background: #b91c1c; }
+
+    /* ── Right: Frame area ── */
+    #frame-area { flex: 1; display: flex; flex-direction: column; }
+    #tab-bar {
+      display: flex; gap: 0; background: #0f172a; border-bottom: 1px solid #334155;
+      padding: 0 8px; flex-shrink: 0;
+    }
+    .tab-btn {
+      padding: 8px 20px; border: none; border-bottom: 2px solid transparent; background: transparent;
+      color: #94a3b8; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+    }
+    .tab-btn:hover { color: #e2e8f0; }
+    .tab-btn.active { color: #38bdf8; border-bottom-color: #38bdf8; }
+
+    #frame-container { flex: 1; position: relative; }
+    #frame-container iframe {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0; background: #fff;
+    }
+
+    /* ── Log ── */
+    #log-area {
+      height: 140px; min-height: 80px; background: #020617; border-top: 1px solid #334155;
+      overflow-y: auto; padding: 6px 12px; font-family: ui-monospace, monospace; font-size: 11px;
+      color: #94a3b8; flex-shrink: 0;
+    }
+    #log-area .log-entry { padding: 1px 0; border-bottom: 1px solid #0f172a; }
+    #log-area .log-time { color: #475569; margin-right: 8px; }
+    #log-area .log-type { font-weight: 600; margin-right: 6px; }
+    #log-area .log-type.sent { color: #38bdf8; }
+    #log-area .log-type.recv { color: #34d399; }
+    #log-area .log-type.info { color: #fbbf24; }
+  </style>
+</head>
+<body>
+
+  <!-- ═══ Control Panel ═══ -->
+  <div id="control-panel">
+    <h1>🥋 Overlay Dojo</h1>
+
+    <!-- Context -->
+    <div class="section">
+      <h2>Patient Context</h2>
+      <label>Patient ID (pid)</label>
+      <input type="text" id="ctx-pid" value="1" />
+      <label>Patient Name</label>
+      <input type="text" id="ctx-pname" value="Doe, Jane" />
+      <label>Encounter ID</label>
+      <input type="text" id="ctx-encounter" value="1" />
+      <button onclick="Dojo.updateContext()">Update Context</button>
+    </div>
+
+    <!-- Quick presets -->
+    <div class="section">
+      <h2>Quick Presets</h2>
+      <p>Fire predefined overlay scenarios</p>
+      <div class="btn-row">
+        <button class="primary" onclick="Dojo.preset('createCondition')">+ Condition</button>
+        <button class="primary" onclick="Dojo.preset('createAllergy')">+ Allergy</button>
+        <button class="primary" onclick="Dojo.preset('createMed')">+ Medication</button>
+      </div>
+      <div class="btn-row" style="margin-top:6px;">
+        <button onclick="Dojo.preset('updateCondition')">✏ Condition</button>
+        <button onclick="Dojo.preset('updateMed')">✏ Medication</button>
+      </div>
+      <div class="btn-row" style="margin-top:6px;">
+        <button class="danger" onclick="Dojo.preset('deleteCondition')">✕ Condition</button>
+        <button class="danger" onclick="Dojo.preset('deleteAllergy')">✕ Allergy</button>
+        <button class="danger" onclick="Dojo.preset('deleteMed')">✕ Medication</button>
+      </div>
+      <div class="btn-row" style="margin-top:6px;">
+        <button class="primary" onclick="Dojo.preset('applyAllMixed')">Apply All (mixed)</button>
+        <button class="danger" onclick="Dojo.clearOverlays()">Clear All</button>
+      </div>
+    </div>
+
+    <!-- Sidebar-only types -->
+    <div class="section">
+      <h2>Sidebar-Only Resources</h2>
+      <p>These have supportsRowTarget=false — expect "sidebar-only" result</p>
+      <div class="btn-row">
+        <button onclick="Dojo.preset('createEncounter')">Encounter</button>
+        <button onclick="Dojo.preset('createObservation')">Observation</button>
+        <button onclick="Dojo.preset('createVital')">Vital</button>
+        <button onclick="Dojo.preset('createSoapNote')">SOAP Note</button>
+      </div>
+    </div>
+
+    <!-- Custom message -->
+    <div class="section">
+      <h2>Custom Message</h2>
+      <label>Message JSON</label>
+      <textarea id="custom-msg">{
+  "type": "overlay:apply",
+  "item": {
+    "id": "custom-1",
+    "resource_type": "Condition",
+    "action": "create",
+    "description": "Custom condition",
+    "proposed_value": {
+      "code_text": "Anxiety Disorder",
+      "code": "F41.9"
+    }
+  }
+}</textarea>
+      <div class="btn-row">
+        <button class="primary" onclick="Dojo.sendCustom()">Send Message</button>
+      </div>
+    </div>
+
+    <!-- Snapshot management -->
+    <div class="section">
+      <h2>Snapshots</h2>
+      <p>Load custom snapshot HTML files captured from a live OpenEMR instance</p>
+      <label>Patient tab (pat) snapshot</label>
+      <input type="file" id="snap-pat" accept=".html" onchange="Dojo.loadSnapshot('pat', this)" style="font-size:11px;" />
+      <label style="margin-top:6px;">Encounter tab (enc) snapshot</label>
+      <input type="file" id="snap-enc" accept=".html" onchange="Dojo.loadSnapshot('enc', this)" style="font-size:11px;" />
+    </div>
+  </div>
+
+  <!-- ═══ Frame Area ═══ -->
+  <div id="frame-area">
+    <div id="tab-bar">
+      <button class="tab-btn active" onclick="Dojo.switchTab('pat')">Patient (pat)</button>
+      <button class="tab-btn" onclick="Dojo.switchTab('enc')">Encounter (enc)</button>
+    </div>
+    <div id="frame-container">
+      <iframe name="pat" src="snapshots/pat.html"></iframe>
+      <iframe name="enc" src="snapshots/enc.html" style="display:none;"></iframe>
+    </div>
+    <div id="log-area">
+      <div class="log-entry"><span class="log-time">--:--:--</span><span class="log-type info">INFO</span>Overlay Dojo ready. Use the control panel to test overlays.</div>
+    </div>
+  </div>
+
+  <!-- Load overlay.js (the code under test) -->
+  <script src="../sidebar/overlay.js"></script>
+
+  <script>
+  ;(function () {
+    // ── Stub OpenEMR globals that overlay.js expects ──
+
+    window.webroot_url = ""
+
+    // Knockout-like observable factory
+    function observable(initialValue) {
+      var _value = initialValue
+      var fn = function (newVal) {
+        if (arguments.length === 0) return _value
+        _value = newVal
+        return fn
+      }
+      return fn
+    }
+
+    function observableArray(initialArray) {
+      var _arr = initialArray || []
+      var fn = function (newArr) {
+        if (arguments.length === 0) return _arr
+        _arr = newArr
+        return fn
+      }
+      fn.push = function (item) { _arr.push(item) }
+      fn.remove = function (item) { _arr = _arr.filter(function (x) { return x !== item }) }
+      return fn
+    }
+
+    // Patient data
+    var patientModel = {
+      pid: observable("1"),
+      pname: observable("Doe, Jane"),
+      pubpid: observable("PUB001"),
+      str_dob: observable("1985-03-15"),
+      selectedEncounterID: observable("1"),
+      encounterArray: observableArray([]),
+    }
+
+    // Tab model
+    function createTabStatus(name, title, url, isVisible, isLocked) {
+      return {
+        name: observable(name),
+        title: observable(title),
+        url: observable(url),
+        visible: observable(isVisible),
+        locked: observable(isLocked),
+        isCurrent: observable(isVisible),
+        loading: observable(false),
+        loading_label: observable(""),
+        closable: observable(true),
+      }
+    }
+
+    var tabsList = observableArray([
+      createTabStatus("pat", "Patient Dashboard", "/interface/patient_file/summary/demographics.php", true, false),
+      createTabStatus("enc", "Encounter", "/interface/encounter/encounter_top.php", false, false),
+    ])
+
+    window.app_view_model = {
+      application_data: {
+        patient: observable(patientModel),
+        tabs: {
+          tabsList: tabsList,
+        },
+      },
+    }
+
+    window.left_nav = {
+      setPatient: function (pname, pid, pubpid, frname, str_dob) {
+        patientModel.pname(pname)
+        patientModel.pid(pid)
+        patientModel.pubpid(pubpid)
+        patientModel.str_dob(str_dob)
+        Dojo.log("info", "left_nav.setPatient(" + pname + ", " + pid + ")")
+      },
+    }
+
+    // navigateTab stub — switches iframe visibility
+    window.navigateTab = function (url, name, afterLoadFunction, loading_label) {
+      Dojo.log("info", "navigateTab(" + url + ", " + name + ")")
+      Dojo.switchTab(name)
+      if (typeof afterLoadFunction === "function") {
+        setTimeout(afterLoadFunction, 100)
+      }
+    }
+
+    // activateTabByName stub
+    window.activateTabByName = function (name, hideOthers) {
+      Dojo.log("info", "activateTabByName(" + name + ", " + hideOthers + ")")
+      Dojo.switchTab(name)
+    }
+
+    // ── Dojo controller ──
+
+    var nextId = 1
+
+    window.Dojo = {
+      log: function (type, message) {
+        var area = document.getElementById("log-area")
+        var entry = document.createElement("div")
+        entry.className = "log-entry"
+        var now = new Date()
+        var time = [now.getHours(), now.getMinutes(), now.getSeconds()]
+          .map(function (n) { return String(n).padStart(2, "0") }).join(":")
+        entry.innerHTML =
+          '<span class="log-time">' + time + "</span>" +
+          '<span class="log-type ' + type + '">' + type.toUpperCase() + "</span>" +
+          message
+        area.appendChild(entry)
+        area.scrollTop = area.scrollHeight
+      },
+
+      switchTab: function (name) {
+        var patFrame = document.querySelector("iframe[name='pat']")
+        var encFrame = document.querySelector("iframe[name='enc']")
+        var tabs = document.querySelectorAll(".tab-btn")
+
+        if (name === "pat") {
+          patFrame.style.display = ""
+          encFrame.style.display = "none"
+          tabs[0].classList.add("active")
+          tabs[1].classList.remove("active")
+        } else {
+          patFrame.style.display = "none"
+          encFrame.style.display = ""
+          tabs[0].classList.remove("active")
+          tabs[1].classList.add("active")
+        }
+
+        // Update tab model visibility
+        var allTabs = tabsList()
+        for (var i = 0; i < allTabs.length; i++) {
+          allTabs[i].visible(allTabs[i].name() === name)
+        }
+      },
+
+      updateContext: function () {
+        var pid = document.getElementById("ctx-pid").value
+        var pname = document.getElementById("ctx-pname").value
+        var enc = document.getElementById("ctx-encounter").value
+        patientModel.pid(pid)
+        patientModel.pname(pname)
+        patientModel.selectedEncounterID(enc)
+        this.log("info", "Context updated: pid=" + pid + ", name=" + pname + ", enc=" + enc)
+      },
+
+      sendMessage: function (msg) {
+        this.log("sent", "<code>" + JSON.stringify(msg).substring(0, 200) + "</code>")
+        window.postMessage(msg, "*")
+      },
+
+      clearOverlays: function () {
+        this.sendMessage({ type: "overlay:clear" })
+      },
+
+      sendCustom: function () {
+        var textarea = document.getElementById("custom-msg")
+        try {
+          var msg = JSON.parse(textarea.value)
+          this.sendMessage(msg)
+        } catch (e) {
+          this.log("info", "❌ Invalid JSON: " + e.message)
+        }
+      },
+
+      loadSnapshot: function (tabName, input) {
+        if (!input.files || !input.files[0]) return
+        var file = input.files[0]
+        var reader = new FileReader()
+        var self = this
+        reader.onload = function () {
+          var frame = document.querySelector("iframe[name='" + tabName + "']")
+          var blob = new Blob([reader.result], { type: "text/html" })
+          frame.src = URL.createObjectURL(blob)
+          self.log("info", "Loaded snapshot for " + tabName + ": " + file.name + " (" + file.size + " bytes)")
+        }
+        reader.readAsText(file)
+      },
+
+      preset: function (name) {
+        var presets = this.getPresets()
+        var p = presets[name]
+        if (!p) {
+          this.log("info", "❌ Unknown preset: " + name)
+          return
+        }
+        if (p.type === "overlay:applyAll") {
+          this.sendMessage(p)
+        } else {
+          this.sendMessage({ type: "overlay:apply", item: p })
+        }
+      },
+
+      getPresets: function () {
+        var pid = document.getElementById("ctx-pid").value
+
+        return {
+          // ── Create ──
+          createCondition: {
+            id: "dojo-" + (nextId++),
+            resource_type: "Condition",
+            action: "create",
+            description: "Add new condition",
+            proposed_value: { code_text: "Generalized Anxiety Disorder", code: "F41.1" },
+          },
+          createAllergy: {
+            id: "dojo-" + (nextId++),
+            resource_type: "AllergyIntolerance",
+            action: "create",
+            description: "Add new allergy",
+            proposed_value: { title: "Amoxicillin", code: "J01CA04" },
+          },
+          createMed: {
+            id: "dojo-" + (nextId++),
+            resource_type: "MedicationRequest",
+            action: "create",
+            description: "Add new medication",
+            proposed_value: { drug: "Atorvastatin", dose: "20mg", route: "oral", freq: "daily" },
+          },
+
+          // ── Update ──
+          updateCondition: {
+            id: "dojo-" + (nextId++),
+            resource_type: "Condition",
+            action: "update",
+            description: "Update hypertension diagnosis",
+            target_resource_id: "Condition/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            proposed_value: { code_text: "Essential Hypertension, Stage 2", code: "I10" },
+          },
+          updateMed: {
+            id: "dojo-" + (nextId++),
+            resource_type: "MedicationRequest",
+            action: "update",
+            description: "Increase Lisinopril dose",
+            target_resource_id: "MedicationRequest/f6a7b8c9-d0e1-2345-fabc-456789012345",
+            proposed_value: { drug: "Lisinopril", dose: "20mg", route: "oral", freq: "daily" },
+          },
+
+          // ── Delete ──
+          deleteCondition: {
+            id: "dojo-" + (nextId++),
+            resource_type: "Condition",
+            action: "delete",
+            description: "Remove depression diagnosis",
+            target_resource_id: "Condition/c3d4e5f6-a7b8-9012-cdef-123456789012",
+          },
+          deleteAllergy: {
+            id: "dojo-" + (nextId++),
+            resource_type: "AllergyIntolerance",
+            action: "delete",
+            description: "Remove Sulfonamides allergy",
+            target_resource_id: "AllergyIntolerance/e5f6a7b8-c9d0-1234-efab-345678901234",
+          },
+          deleteMed: {
+            id: "dojo-" + (nextId++),
+            resource_type: "MedicationRequest",
+            action: "delete",
+            description: "Discontinue Metformin",
+            target_resource_id: "MedicationRequest/a7b8c9d0-e1f2-3456-abcd-567890123456",
+          },
+
+          // ── Sidebar-only ──
+          createEncounter: {
+            id: "dojo-" + (nextId++),
+            resource_type: "Encounter",
+            action: "create",
+            description: "New encounter",
+            proposed_value: { title: "Follow-up Visit" },
+          },
+          createObservation: {
+            id: "dojo-" + (nextId++),
+            resource_type: "Observation",
+            action: "create",
+            description: "Lab result",
+            proposed_value: { display: "HbA1c 7.2%" },
+          },
+          createVital: {
+            id: "dojo-" + (nextId++),
+            resource_type: "Vital",
+            action: "create",
+            description: "New vitals",
+            proposed_value: { title: "BP 130/85" },
+          },
+          createSoapNote: {
+            id: "dojo-" + (nextId++),
+            resource_type: "SoapNote",
+            action: "create",
+            description: "New SOAP note",
+            proposed_value: { title: "Follow-up SOAP" },
+          },
+
+          // ── Batch ──
+          applyAllMixed: {
+            type: "overlay:applyAll",
+            patientID: pid,
+            focusIndex: 0,
+            items: [
+              {
+                id: "dojo-" + (nextId++),
+                resource_type: "Condition",
+                action: "create",
+                description: "Add GERD",
+                proposed_value: { code_text: "Gastroesophageal Reflux Disease", code: "K21.0" },
+              },
+              {
+                id: "dojo-" + (nextId++),
+                resource_type: "MedicationRequest",
+                action: "update",
+                description: "Increase Lisinopril",
+                target_resource_id: "MedicationRequest/f6a7b8c9-d0e1-2345-fabc-456789012345",
+                proposed_value: { drug: "Lisinopril", dose: "20mg", route: "oral", freq: "daily" },
+              },
+              {
+                id: "dojo-" + (nextId++),
+                resource_type: "AllergyIntolerance",
+                action: "delete",
+                description: "Remove mild Sulfonamides allergy",
+                target_resource_id: "AllergyIntolerance/e5f6a7b8-c9d0-1234-efab-345678901234",
+              },
+            ],
+          },
+        }
+      },
+    }
+
+    // ── Listen for overlay responses ──
+    window.addEventListener("message", function (event) {
+      if (!event.data || typeof event.data.type !== "string") return
+      if (!event.data.type.startsWith("overlay:")) return
+
+      // Don't log messages we sent ourselves (apply/applyAll/clear)
+      if (event.data.type === "overlay:apply" || event.data.type === "overlay:applyAll" || event.data.type === "overlay:clear") return
+
+      Dojo.log("recv", "<code>" + JSON.stringify(event.data).substring(0, 300) + "</code>")
+    })
+  })()
+  </script>
+</body>
+</html>
