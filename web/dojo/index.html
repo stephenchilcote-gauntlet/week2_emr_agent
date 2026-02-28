@@ -95,6 +95,12 @@
     .log-type.recv { color: #34d399; }
     .log-type.info { color: #fbbf24; }
     .log-type.error { color: #f87171; }
+
+    /* ── Right: Sidebar ── */
+    #sidebar-container {
+      width: 380px; min-width: 380px; border-left: 1px solid #334155; flex-shrink: 0;
+    }
+    #sidebar-container iframe { width: 100%; height: 100%; border: 0; }
   </style>
 </head>
 <body>
@@ -130,9 +136,9 @@
       <button onclick="Dojo.updateContext()" style="margin-top:4px;">Update Context</button>
     </div>
 
-    <!-- ═══ 15 Manifests ═══ -->
+    <!-- ═══ 18 Manifests ═══ -->
     <div class="section">
-      <h2>Manifest Library (15)</h2>
+      <h2>Manifest Library (18)</h2>
       <p>Each exercises a distinct overlay.js code path. Hover for details.</p>
       <div class="manifest-list" id="manifest-list"></div>
     </div>
@@ -182,6 +188,11 @@
     <div id="log-area">
       <div class="log-entry"><span class="log-time">--:--:--</span><span class="log-type info">INFO</span> Overlay Dojo ready. Click a manifest to test.</div>
     </div>
+  </div>
+
+  <!-- ═══ Sidebar ═══ -->
+  <div id="sidebar-container">
+    <iframe id="sidebar-frame" src="sidebar-dojo.html"></iframe>
   </div>
 
   <!-- Load overlay.js (the code under test) -->
@@ -507,11 +518,55 @@
           proposed_value: { code_text: "This should not render", code: "Z99.9" },
         }},
       },
+
+      // ── CROSS-TAB: exercise tab switching + mixed success/failure ──
+
+      { // 16
+        label: "Cross-tab: pat + enc (focus=pat)",
+        tag: "batch", icon: "🔀",
+        tooltip: "Exercises: applyAllOverlays cross-tab — Condition create on pat (succeeds), Encounter create on enc (fails, container null). Focus on pat item, no tab switch.",
+        message: function(pid) { return { type: "overlay:applyAll", focusIndex: 0, items: [
+          {id:"m16a", resource_type:"Condition", action:"create", description:"Add Migraine", proposed_value:{code_text:"Migraine without aura", code:"G43.009"}},
+          {id:"m16b", resource_type:"Encounter", action:"create", description:"Schedule follow-up", proposed_value:{type:"Follow-up Visit", display:"2-week follow-up"}}
+        ]}},
+      },
+
+      { // 17
+        label: "Cross-tab: enc-focused (tab switch)",
+        tag: "batch", icon: "↔️",
+        tooltip: "Exercises: navigateToTab switches to enc for focused item. MedicationRequest on pat succeeds, Observation on enc fails. Focus=1 on enc item → tab switches to enc.",
+        message: function(pid) { return { type: "overlay:applyAll", focusIndex: 1, items: [
+          {id:"m17a", resource_type:"MedicationRequest", action:"create", description:"Add Ondansetron", proposed_value:{drug:"Ondansetron", dose:"4mg", route:"oral", freq:"PRN nausea"}},
+          {id:"m17b", resource_type:"Observation", action:"create", description:"Add lab result", proposed_value:{code_text:"HbA1c", code:"4548-4", display:"7.2%"}}
+        ]}},
+      },
+
+      { // 18
+        label: "Cross-tab: 4-item mixed (focus=enc)",
+        tag: "batch", icon: "🌐",
+        tooltip: "Exercises: 4-item batch across both tabs. 2 pat items succeed, 2 enc items fail. Focus=2 on Procedure (enc) → tab switch. Tour navigation crosses tab boundaries.",
+        message: function(pid) { return { type: "overlay:applyAll", focusIndex: 2, items: [
+          {id:"m18a", resource_type:"Condition", action:"create", description:"Add Iron deficiency anemia", proposed_value:{code_text:"Iron deficiency anemia", code:"D50.9"}},
+          {id:"m18b", resource_type:"AllergyIntolerance", action:"create", description:"Add Codeine allergy", proposed_value:{title:"Codeine"}},
+          {id:"m18c", resource_type:"Procedure", action:"create", description:"Schedule blood draw", proposed_value:{code_text:"Venipuncture", code:"36415"}},
+          {id:"m18d", resource_type:"SoapNote", action:"create", description:"Add follow-up note", proposed_value:{assessment:"Iron deficiency - likely dietary", plan:"Start ferrous sulfate 325mg daily"}}
+        ]}},
+      },
     ]
 
     // ── Dojo controller ──
 
     window.Dojo = {
+      getSidebarWindow: function () {
+        var frame = document.getElementById("sidebar-frame")
+        return frame && frame.contentWindow ? frame.contentWindow : null
+      },
+
+      sendToSidebar: function (msg) {
+        var sw = this.getSidebarWindow()
+        if (sw) sw.postMessage(msg, "*")
+      },
+
       log: function (type, message) {
         var area = document.getElementById("log-area")
         var entry = document.createElement("div")
@@ -553,6 +608,7 @@
         patientModel.pid(pid); patientModel.pname(pname)
         patientModel.selectedEncounterID(enc)
         this.log("info", "Context → pid=" + pid + " name=" + pname + " enc=" + enc)
+        this.sendToSidebar({ type: "dojo:updateContext", pid: pid, pname: pname, encounter: enc })
       },
 
       sendMessage: function (msg) {
@@ -562,6 +618,7 @@
 
       clearOverlays: function () {
         this.sendMessage({ type: "overlay:clear" })
+        this.sendToSidebar({ type: "dojo:clearManifest" })
       },
 
       resetIframes: function () {
@@ -601,7 +658,26 @@
           ? m.message(document.getElementById("ctx-pid").value)
           : m.message
         this.log("info", "━━ Manifest #" + (index + 1) + ": " + m.label + " ━━")
-        this.sendMessage(msg)
+
+        // Extract items and route through sidebar — sidebar drives overlay.js
+        var items, focusIndex
+        if (msg.type === "overlay:applyAll") {
+          items = msg.items
+          focusIndex = msg.focusIndex || 0
+        } else if (msg.type === "overlay:apply" && msg.item) {
+          items = [msg.item]
+          focusIndex = 0
+        } else {
+          this.sendMessage(msg)
+          return
+        }
+        this.log("sent", "<code>dojo:setManifest (" + items.length + " items, focus=" + focusIndex + ")</code>")
+        this.sendToSidebar({
+          type: "dojo:setManifest",
+          items: items,
+          focusIndex: focusIndex,
+          patientID: document.getElementById("ctx-pid").value,
+        })
       },
     }
 
@@ -623,12 +699,16 @@
       listEl.appendChild(btn)
     }
 
-    // ── Listen for overlay responses ──
+    // ── Listen for overlay responses + forward inline actions to sidebar ──
     window.addEventListener("message", function (event) {
       if (!event.data || typeof event.data.type !== "string") return
       if (!event.data.type.startsWith("overlay:")) return
       // Skip our own outbound messages
       if (event.data.type === "overlay:apply" || event.data.type === "overlay:applyAll" || event.data.type === "overlay:clear") return
+      // Forward inline action messages from overlay buttons to sidebar iframe
+      if (event.data.type === "overlay:accept" || event.data.type === "overlay:reject" || event.data.type === "overlay:navigate") {
+        Dojo.sendToSidebar(event.data)
+      }
       Dojo.log("recv", "<code>" + JSON.stringify(event.data).substring(0, 300) + "</code>")
     })
   })()

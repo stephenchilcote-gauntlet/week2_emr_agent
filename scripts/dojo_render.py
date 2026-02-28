@@ -10,7 +10,7 @@ Usage:
     uv run scripts/dojo_render.py 1              # manifest #1, screenshot pat tab
     uv run scripts/dojo_render.py 5 --tab enc    # manifest #5, screenshot enc tab
     uv run scripts/dojo_render.py 1 5 9 11       # multiple manifests, one screenshot each
-    uv run scripts/dojo_render.py --all           # all 15 manifests
+    uv run scripts/dojo_render.py --all           # all 18 manifests
     uv run scripts/dojo_render.py 1 --headed      # visible browser for debugging
 """
 from __future__ import annotations
@@ -28,6 +28,7 @@ from playwright.sync_api import sync_playwright
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "web" / "dojo" / "screenshots"
+MANIFEST_COUNT = 18
 PORT = 18923  # arbitrary high port unlikely to collide
 
 
@@ -91,7 +92,7 @@ def main():
         "manifests",
         nargs="*",
         type=int,
-        help="Manifest numbers to render (1-15)",
+        help=f"Manifest numbers to render (1-{MANIFEST_COUNT})",
     )
     parser.add_argument(
         "--serve",
@@ -101,7 +102,7 @@ def main():
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Render all 15 manifests",
+        help=f"Render all {MANIFEST_COUNT} manifests",
     )
     parser.add_argument(
         "--tab",
@@ -136,7 +137,7 @@ def main():
         return
 
     if args.all:
-        manifest_nums = list(range(1, 16))
+        manifest_nums = list(range(1, MANIFEST_COUNT + 1))
     elif args.manifests:
         manifest_nums = args.manifests
     else:
@@ -144,8 +145,8 @@ def main():
         sys.exit(1)
 
     for n in manifest_nums:
-        if n < 1 or n > 15:
-            print(f"Error: manifest number {n} out of range (1-15)", file=sys.stderr)
+        if n < 1 or n > MANIFEST_COUNT:
+            print(f"Error: manifest number {n} out of range (1-{MANIFEST_COUNT})", file=sys.stderr)
             sys.exit(1)
 
     args.out.mkdir(parents=True, exist_ok=True)
