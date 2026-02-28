@@ -712,6 +712,11 @@
       Dojo.log("recv", "<code>" + JSON.stringify(event.data).substring(0, 300) + "</code>")
     })
   })()
+
+  // ── Auto-close tab when dev server dies ──
+  setInterval(function () {
+    fetch("/dojo/index.html", { method: "HEAD" }).catch(function () { window.close() })
+  }, 2000)
   </script>
 </body>
 </html>
