@@ -6,6 +6,7 @@ Serves the dojo on localhost, opens it in headless Chromium via Playwright,
 fires a manifest, and screenshots the result.
 
 Usage:
+    uv run scripts/dojo_render.py --serve         # serve dojo & open in browser (Ctrl+C to stop)
     uv run scripts/dojo_render.py 1              # manifest #1, screenshot pat tab
     uv run scripts/dojo_render.py 5 --tab enc    # manifest #5, screenshot enc tab
     uv run scripts/dojo_render.py 1 5 9 11       # multiple manifests, one screenshot each
@@ -20,6 +21,7 @@ import json
 import sys
 import threading
 import time
+import webbrowser
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -92,6 +94,11 @@ def main():
         help="Manifest numbers to render (1-15)",
     )
     parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Start HTTP server and open dojo in your default browser (Ctrl+C to stop)",
+    )
+    parser.add_argument(
         "--all",
         action="store_true",
         help="Render all 15 manifests",
@@ -114,6 +121,19 @@ def main():
         help=f"Output directory (default: {OUTPUT_DIR})",
     )
     args = parser.parse_args()
+
+    if args.serve:
+        server = serve_web_dir()
+        url = f"http://127.0.0.1:{PORT}/dojo/index.html"
+        print(f"Serving dojo at {url}")
+        print("Ctrl+C to stop")
+        webbrowser.open(url)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\nStopped.")
+            server.shutdown()
+        return
 
     if args.all:
         manifest_nums = list(range(1, 16))
