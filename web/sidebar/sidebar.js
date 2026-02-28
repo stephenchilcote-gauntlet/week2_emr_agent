@@ -627,13 +627,6 @@ class SidebarApp {
     desc.textContent = item.description || "No description"
     card.appendChild(desc)
 
-    if (!this.isInPageResource(item.resource_type)) {
-      const note = document.createElement("div")
-      note.className = "review-card-sidebar-note"
-      note.textContent = "Cannot preview in-page — review details here."
-      card.appendChild(note)
-    }
-
     if (item.current_value && (item.action === "update" || item.action === "delete")) {
       const section = document.createElement("div")
       section.className = "review-card-section"
@@ -716,11 +709,6 @@ class SidebarApp {
     this.el.reviewCards.appendChild(card)
   }
 
-  isInPageResource(resourceType) {
-    const supported = ["Condition", "AllergyIntolerance", "MedicationRequest"]
-    return supported.includes(resourceType)
-  }
-
   tourNavigate(delta) {
     const manifest = this.state.pendingManifest
     if (!manifest || !manifest.items.length) return
@@ -749,9 +737,7 @@ class SidebarApp {
   }
 
   handleOverlayResult(data) {
-    if (!data.applied && data.reason === "sidebar-only") {
-      // expected for non-dashboard resources, no action needed
-    }
+    // overlay engine reports result; no special handling needed
   }
 
   handleInlineAction(itemId, status) {

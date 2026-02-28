@@ -111,10 +111,10 @@
       </div>
     </div>
 
-    <!-- Sidebar-only types -->
+    <!-- Encounter-tab resources (container TBD) -->
     <div class="section">
-      <h2>Sidebar-Only Resources</h2>
-      <p>These have supportsRowTarget=false — expect "sidebar-only" result</p>
+      <h2>Encounter-Tab Resources</h2>
+      <p>These attempt overlay rendering; container selectors are TBD</p>
       <div class="btn-row">
         <button onclick="Dojo.preset('createEncounter')">Encounter</button>
         <button onclick="Dojo.preset('createObservation')">Observation</button>
@@ -436,7 +436,7 @@
             target_resource_id: "MedicationRequest/a7b8c9d0-e1f2-3456-abcd-567890123456",
           },
 
-          // ── Sidebar-only ──
+          // ── Encounter-tab resources (container TBD) ──
           createEncounter: {
             id: "dojo-" + (nextId++),
             resource_type: "Encounter",

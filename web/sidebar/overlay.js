@@ -18,12 +18,12 @@
       rowSelector: ".list-group-item",
       supportsRowTarget: true,
     },
-    Encounter: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
-    Observation: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
-    Procedure: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
-    DiagnosticReport: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
-    Vital: { tab: "pat", container: "#vitals_ps_expand", rowSelector: null, supportsRowTarget: false },
-    SoapNote: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: false },
+    Encounter: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: true },
+    Observation: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: true },
+    Procedure: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: true },
+    DiagnosticReport: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: true },
+    Vital: { tab: "pat", container: "#vitals_ps_expand", rowSelector: null, supportsRowTarget: true },
+    SoapNote: { tab: "enc", container: null, rowSelector: null, supportsRowTarget: true },
   }
 
   var injectedElements = []
@@ -456,8 +456,8 @@
 
   function applySingleOverlay(item) {
     var mapping = RESOURCE_PAGE_MAP[item.resource_type]
-    if (!mapping || !mapping.supportsRowTarget) {
-      return { applied: false, reason: "sidebar-only" }
+    if (!mapping) {
+      return { applied: false, reason: "Unknown resource type: " + item.resource_type }
     }
 
     if (item.action === "create") {
@@ -498,8 +498,8 @@
 
   function applyOverlay(item) {
     var mapping = RESOURCE_PAGE_MAP[item.resource_type]
-    if (!mapping || !mapping.supportsRowTarget) {
-      return { applied: false, reason: "sidebar-only" }
+    if (!mapping) {
+      return { applied: false, reason: "Unknown resource type: " + item.resource_type }
     }
 
     clearAllOverlays()
