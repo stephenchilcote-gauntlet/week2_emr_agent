@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from src.agent.labels import uuid_to_words
 from src.agent.models import AgentMessage, AgentSession, ChangeManifest, ManifestAction, ManifestItem, ToolCall
-from src.api.main import app
+from src.api.main import _ephemeral_sessions, app
 
 PATIENT_FHIR_UUID = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
 PATIENT_PID = "5"
@@ -74,7 +74,7 @@ def test_sessions_are_user_scoped() -> None:
         client.app.state.agent_loop = _DummyAgentLoop()
         create = client.post("/api/sessions", headers=_headers("u-1")).json()
 
-        # Send a message so the session has content (empty sessions are filtered)
+        # Send a message so the session gets persisted (empty sessions are ephemeral)
         client.post(
             "/api/chat",
             headers=_headers("u-1"),
@@ -106,8 +106,7 @@ def test_approve_applies_modified_items() -> None:
         )
 
         created = client.post("/api/sessions", headers=_headers("u-1")).json()
-        session = client.app.state.session_store.load(created["session_id"])
-        assert session is not None
+        session = _ephemeral_sessions[created["session_id"]]
         session.manifest = ChangeManifest(
             patient_id=PATIENT_FHIR_UUID,
             items=[
@@ -338,8 +337,7 @@ def test_get_manifest_returns_manifest_when_present() -> None:
     with TestClient(app) as client:
         client.app.state.agent_loop = _DummyAgentLoop()
         created = client.post("/api/sessions", headers=_headers("u-mf")).json()
-        session = client.app.state.session_store.load(created["session_id"])
-        assert session is not None
+        session = _ephemeral_sessions[created["session_id"]]
         session.manifest = ChangeManifest(
             patient_id=PATIENT_FHIR_UUID,
             items=[

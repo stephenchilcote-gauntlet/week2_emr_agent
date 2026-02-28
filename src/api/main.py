@@ -33,6 +33,7 @@ from .schemas import (
 from .session_store import SessionStore
 
 _session_locks: dict[str, asyncio.Lock] = {}
+_ephemeral_sessions: dict[str, AgentSession] = {}
 _web_root = Path(__file__).resolve().parents[2] / "web" / "sidebar"
 
 
@@ -122,6 +123,16 @@ def _summarize_tool_calls(session: AgentSession) -> list[dict[str, Any]] | None:
     ]
 
 
+def _resolve_session(
+    session_id: str,
+    session_store: SessionStore,
+) -> AgentSession | None:
+    session = _ephemeral_sessions.get(session_id)
+    if session is not None:
+        return session
+    return session_store.load(session_id)
+
+
 def _get_or_create_session(
     session_id: str | None,
     user_id: str,
@@ -129,10 +140,10 @@ def _get_or_create_session(
 ) -> AgentSession:
     if session_id is None:
         session = AgentSession(openemr_user_id=user_id)
-        session_store.save(session)
+        _ephemeral_sessions[session.id] = session
         return session
 
-    session = session_store.load(session_id)
+    session = _resolve_session(session_id, session_store)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.openemr_user_id != user_id:
@@ -145,7 +156,7 @@ def _get_session(
     user_id: str,
     session_store: SessionStore,
 ) -> AgentSession:
-    session = session_store.load(session_id)
+    session = _resolve_session(session_id, session_store)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.openemr_user_id != user_id:
@@ -233,6 +244,7 @@ async def chat(
             detail=f"LLM API error: {exc.status_code} {exc.message}",
         ) from exc
     session_store.save(session)
+    _ephemeral_sessions.pop(session.id, None)
 
     last_assistant = ""
     for msg in reversed(session.messages):
@@ -262,7 +274,7 @@ async def create_session(
     user_id: str = Depends(_require_user_id),
 ) -> dict[str, str]:
     session = AgentSession(openemr_user_id=user_id)
-    app.state.session_store.save(session)
+    _ephemeral_sessions[session.id] = session
     otel_trace.get_current_span().set_attribute("session.id", session.id)
     return {"session_id": session.id, "phase": session.phase}
 
@@ -272,7 +284,7 @@ async def list_sessions(
     user_id: str = Depends(_require_user_id),
 ) -> list[dict[str, Any]]:
     sessions = app.state.session_store.list_for_user(user_id)
-    return [_session_summary(session) for session in sessions if session.messages]
+    return [_session_summary(session) for session in sessions]
 
 
 @app.get("/api/sessions/{session_id}/messages")
