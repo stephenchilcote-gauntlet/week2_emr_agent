@@ -340,11 +340,11 @@ class AgentLoop:
                 )
 
             elif tool_call.name == "submit_manifest":
-                if session.phase == "reviewing":
+                if session.phase in ("reviewing", "executing"):
                     return ToolResult(
                         tool_call_id=tool_call.id,
                         content=(
-                            "Error: manifest is already in reviewing phase; "
+                            "Error: manifest is already in reviewing/executing phase; "
                             "wait for clinician action."
                         ),
                         is_error=True,
@@ -637,10 +637,8 @@ class AgentLoop:
                     "Failed to execute manifest item %s: %s", item.id, exc
                 )
 
-        session.manifest.status = (
-            "completed" if failed == 0 else "failed"
-        )
-        session.phase = "complete"
+        manifest_status = "completed" if failed == 0 else "failed"
+        session.manifest.status = manifest_status
 
         session.messages.append(
             AgentMessage(
@@ -651,6 +649,10 @@ class AgentLoop:
                 ),
             )
         )
+
+        # Clear the manifest so the agent can propose new changes in this session.
+        session.manifest = None
+        session.phase = "planning"
 
         return session
 

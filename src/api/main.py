@@ -389,16 +389,21 @@ async def approve_manifest(
     if has_approved:
         session.manifest.status = "approved"
         report = await verify_manifest(session.manifest, openemr_client)
+        manifest_id = session.manifest.id
     else:
         from ..verification.checks import VerificationReport
 
+        manifest_id = session.manifest.id
         session.manifest.status = "rejected"
-        report = VerificationReport(manifest_id=session.manifest.id)
+        report = VerificationReport(manifest_id=manifest_id)
+        # All items rejected — clear manifest so agent can propose new changes.
+        session.manifest = None
+        session.phase = "planning"
 
     session_store.save(session)
     return ApprovalResponse(
         session_id=session.id,
-        manifest_id=session.manifest.id,
+        manifest_id=manifest_id,
         results=[r.model_dump() for r in report.results],
         passed=report.passed,
     )
@@ -423,16 +428,19 @@ async def execute_manifest(
             detail=f"Manifest already {session.manifest.status}; cannot execute again",
         )
 
+    # Capture manifest metadata before execution (manifest is cleared after).
+    manifest_id = session.manifest.id
+    manifest_items = session.manifest.items
+
     lock = _session_locks.setdefault(session_id, asyncio.Lock())
     agent_loop: AgentLoop = app.state.agent_loop
     async with lock:
         session = await agent_loop.execute_approved(session)
     session_store.save(session)
 
-    items = session.manifest.items if session.manifest else []
-    completed_count = sum(1 for i in items if i.status == "completed")
-    failed_count = sum(1 for i in items if i.status == "failed")
-    skipped_count = sum(1 for i in items if i.status in ("rejected", "pending"))
+    completed_count = sum(1 for i in manifest_items if i.status == "completed")
+    failed_count = sum(1 for i in manifest_items if i.status == "failed")
+    skipped_count = sum(1 for i in manifest_items if i.status in ("rejected", "pending"))
     audit_store: AuditStore = app.state.audit_store
     audit_store.record(AuditEvent(
         session_id=session.id,
@@ -440,25 +448,26 @@ async def execute_manifest(
         event_type="manifest_executed",
         summary=f"Manifest executed: {completed_count} completed, {failed_count} failed, {skipped_count} skipped",
         details={
-            "manifest_id": session.manifest.id if session.manifest else None,
+            "manifest_id": manifest_id,
             "completed_count": completed_count,
             "failed_count": failed_count,
             "skipped_count": skipped_count,
-            "item_ids": [i.id for i in items],
+            "item_ids": [i.id for i in manifest_items],
         },
     ))
 
+    manifest_status = "completed" if failed_count == 0 else "failed"
     return {
         "session_id": session.id,
         "phase": session.phase,
-        "manifest_status": session.manifest.status if session.manifest else None,
+        "manifest_status": manifest_status,
         "items": [
             {
                 "id": item.id,
                 "status": item.status,
                 "execution_result": item.execution_result,
             }
-            for item in items
+            for item in manifest_items
         ],
     }
 
