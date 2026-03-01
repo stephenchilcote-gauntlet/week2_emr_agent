@@ -16,7 +16,7 @@ The project, service configs, environment variables, and MySQL data are all pres
 
 | Service | Internal domain | Public domain (when active) |
 |---------|-----------------|---------------------------|
-| agent | `agent.railway.internal:8000` | `agent-production-c95b.up.railway.app` |
+| agent | `agent.railway.internal:8000` | `agent-production-c763.up.railway.app` |
 | openemr | `openemr.railway.internal:80` | `openemr-production-f10c.up.railway.app` |
 | jaeger | `jaeger.railway.internal:4317` (collector), `:16686` (UI) | auto-assigned |
 | MySQL | Railway managed plugin | N/A |
@@ -47,7 +47,7 @@ Wait for build + healthcheck (~2 min). Verify:
 ```bash
 # Internal health (from another Railway service) or add a temporary public domain:
 $RAILWAY domain   # generates a public URL
-curl https://agent-production-c95b.up.railway.app/api/health
+curl https://agent-production-c763.up.railway.app/api/health
 # Expected: {"status":"healthy","openemr_connected":true,"openemr_status":"ok"}
 ```
 
@@ -75,14 +75,14 @@ $RAILWAY up --detach
 
 ```bash
 # Agent health
-curl https://agent-production-c95b.up.railway.app/api/health
+curl https://agent-production-c763.up.railway.app/api/health
 
 # OpenEMR login page
 curl -s -o /dev/null -w "%{http_code}" https://openemr-production-f10c.up.railway.app
 # Expected: 302 (redirect to login)
 
 # FHIR metadata through agent
-curl https://agent-production-c95b.up.railway.app/api/fhir/metadata | python3 -m json.tool | head -5
+curl https://agent-production-c763.up.railway.app/api/fhir/metadata | python3 -m json.tool | head -5
 ```
 
 ### Step 5: Remove public domain from agent (security)
@@ -94,6 +94,34 @@ Only OpenEMR needs a public domain.
 # Remove from Railway dashboard: Settings → Networking → remove the public domain
 # The CLI doesn't support domain deletion — use the dashboard.
 ```
+
+---
+
+## Known Issues / Troubleshooting (2026-02-28)
+
+### Public domain HTTPS hangs after TLS (V2 runtime)
+
+**Symptom:** Container runs fine (liveness probes from `100.64.0.x` return 200 OK, `railway ssh` works,
+`railway logs` show uvicorn running on port 8000), but `curl https://<domain>/api/health` times out.
+HTTP port 80 returns a 301 from Fastly CDN, but HTTPS never gets a backend response.
+
+**Root cause:** Not fully diagnosed. Railway Runtime V2 (`RAILWAY_BETA_ENABLE_RUNTIME_V2=1`, system-injected)
+appears to have different public-domain routing behavior. Internal routing works; external edge routing does not.
+
+**Things that did NOT fix it:**
+- Changing `PORT` (tried 8000, 8080, Railway-injected)
+- Removing/adding `EXPOSE 8000` in Dockerfile
+- Clearing `healthcheckPath` on the service instance
+- Cycling the public domain (delete + recreate via GraphQL API)
+- Multiple redeployments
+
+**Next steps if you hit this again:**
+1. Check Railway status page and community Discord for V2 routing issues
+2. Try disabling V2 runtime if Railway exposes a way to do so (it's system-injected)
+3. Contact Railway support with deployment ID and "edge not routing to container" description
+
+**What DOES work on Railway:** Build, deploy, SSH, internal networking, liveness probes.
+The code itself is fine — this is a Railway platform routing issue.
 
 ---
 
@@ -110,7 +138,7 @@ done
 Verify everything is down:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" --max-time 10 https://agent-production-c95b.up.railway.app/api/health
+curl -s -o /dev/null -w "%{http_code}" --max-time 10 https://agent-production-c763.up.railway.app/api/health
 # Expected: 404 (no backend)
 ```
 
@@ -165,7 +193,7 @@ The eval runner at `tests/eval/runner.py` makes direct HTTP calls (no browser ne
 ```bash
 # Requires agent to have a public domain temporarily
 source .venv/bin/activate
-python -m tests.eval.run_eval --url https://agent-production-c95b.up.railway.app --output data/eval_results.json
+python -m tests.eval.run_eval --url https://agent-production-c763.up.railway.app --output data/eval_results.json
 ```
 
 No LLM-as-judge by default — the runner uses only keyword/structural assertions.
