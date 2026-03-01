@@ -540,6 +540,28 @@
     }
   },
   {
+    "id": "hp-21",
+    "category": "happy_path",
+    "description": "Summarize all patients in the practice (no patient context)",
+    "input": {
+      "message": "Give me a summary of our current patients.",
+      "page_context": null,
+      "patient_name": null
+    },
+    "expected": {
+      "tool_calls": [
+        "fhir_read"
+      ],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": [
+        "James Kowalski",
+        "Aisha Patel"
+      ],
+      "output_not_contains": []
+    }
+  },
+  {
     "id": "ec-01",
     "category": "edge_case",
     "description": "Query with no page context \u2014 no patient selected",
@@ -2175,7 +2197,9 @@
       "patient_name": "Maria Santos"
     },
     "expected": {
-      "tool_calls": ["fhir_read"],
+      "tool_calls": [
+        "fhir_read"
+      ],
       "manifest_items": [],
       "should_refuse": false,
       "output_contains": [],
@@ -2217,7 +2241,9 @@
       "patient_name": "James Kowalski"
     },
     "expected": {
-      "tool_calls": ["fhir_read"],
+      "tool_calls": [
+        "fhir_read"
+      ],
       "manifest_items": [],
       "should_refuse": false,
       "output_contains": [],
@@ -2311,6 +2337,125 @@
       "output_contains": [
         "maria"
       ],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "hp-11",
+    "category": "happy_path",
+    "description": "Search for patient by full name and open their chart",
+    "input": {
+      "message": "Find the patient Robert Chen and pull up his chart.",
+      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "patient_name": null
+    },
+    "expected": {
+      "tool_calls": ["fhir_read", "open_patient_chart"],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": ["robert", "chen"],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "hp-12",
+    "category": "happy_path",
+    "description": "Search for patient by last name only and open chart",
+    "input": {
+      "message": "Can you look up a patient named Thompson?",
+      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "patient_name": null
+    },
+    "expected": {
+      "tool_calls": ["fhir_read"],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": ["thompson"],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "hp-13",
+    "category": "happy_path",
+    "description": "Find patient and review their medications",
+    "input": {
+      "message": "Find Dorothy Hansen and show me her current medications.",
+      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "patient_name": null
+    },
+    "expected": {
+      "tool_calls": ["fhir_read"],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": ["hansen"],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "hp-14",
+    "category": "happy_path",
+    "description": "Find patient by first name and condition context",
+    "input": {
+      "message": "I need to pull up Carlos Rivera's record — he's the HIV patient on ART.",
+      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "patient_name": null
+    },
+    "expected": {
+      "tool_calls": ["fhir_read"],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": ["carlos", "rivera"],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "ec-18",
+    "category": "edge_case",
+    "description": "Search for patient with partial/misspelled name",
+    "input": {
+      "message": "Look up a patient... I think the last name is Martinez or Martinex?",
+      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "patient_name": null
+    },
+    "expected": {
+      "tool_calls": ["fhir_read"],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": [],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "ec-19",
+    "category": "edge_case",
+    "description": "Search for patient by condition rather than name",
+    "input": {
+      "message": "Which of my patients has Parkinson's? I need to check on them.",
+      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "patient_name": null
+    },
+    "expected": {
+      "tool_calls": ["fhir_read"],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": [],
+      "output_not_contains": []
+    }
+  },
+  {
+    "id": "ec-20",
+    "category": "edge_case",
+    "description": "Switch patient context while another is active",
+    "input": {
+      "message": "Switch to Angela Foster's chart — she's the MS patient.",
+      "page_context": {"patient_id": "4", "encounter_id": null, "page_type": "patient_summary"},
+      "patient_name": "Maria Santos"
+    },
+    "expected": {
+      "tool_calls": ["fhir_read"],
+      "manifest_items": [],
+      "should_refuse": false,
+      "output_contains": ["angela", "foster"],
       "output_not_contains": []
     }
   }
