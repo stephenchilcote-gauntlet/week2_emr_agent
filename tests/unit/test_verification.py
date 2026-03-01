@@ -755,3 +755,187 @@ class TestDoseSanity:
         )
         results = check_dose_sanity(item)
         assert len(results) == 1
+
+
+# ------------------------------------------------------------------
+# Realistic FHIR response shape tests
+#
+# OpenEMR's FHIR API returns MedicationRequest with
+# medicationCodeableConcept (not flat "drug"/"title"/"display" keys)
+# and AllergyIntolerance with code.coding[].display (not flat
+# "substance"/"display"/"code.text" keys).  These tests verify our
+# checks work against the real response shape.
+# ------------------------------------------------------------------
+
+
+class TestMedicationDuplicateRealisticFHIR:
+    """Duplicate-therapy check against realistic OpenEMR FHIR MedicationRequest."""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_detected_with_real_fhir_shape(self, mock_openemr_client):
+        """OpenEMR returns medicationCodeableConcept, not flat 'drug' field.
+
+        The check should detect a duplicate when the existing medication
+        uses the standard FHIR structure that OpenEMR actually returns.
+        """
+        mock_openemr_client.fhir_read.side_effect = [
+            {  # MedicationRequest bundle — realistic OpenEMR shape
+                "resourceType": "Bundle",
+                "total": 1,
+                "entry": [{
+                    "resource": {
+                        "resourceType": "MedicationRequest",
+                        "id": "med-uuid-1",
+                        "status": "active",
+                        "intent": "order",
+                        "medicationCodeableConcept": {
+                            "coding": [{
+                                "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+                                "code": "860975",
+                                "display": "Metformin Hydrochloride 500 MG Oral Tablet",
+                            }],
+                        },
+                    },
+                }],
+            },
+            {"entry": []},  # AllergyIntolerance — empty
+        ]
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Metformin"},
+            source_reference="Encounter/1",
+            description="Add metformin",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        dup = [r for r in results if r.check_name == "medication_duplicate"]
+        assert len(dup) == 1, (
+            "Duplicate check must detect 'Metformin' in medicationCodeableConcept.coding[].display"
+        )
+        assert dup[0].passed is False
+
+    @pytest.mark.asyncio
+    async def test_duplicate_detected_with_text_only_fhir_shape(self, mock_openemr_client):
+        """OpenEMR falls back to medicationCodeableConcept.text when no RxNorm code."""
+        mock_openemr_client.fhir_read.side_effect = [
+            {
+                "resourceType": "Bundle",
+                "total": 1,
+                "entry": [{
+                    "resource": {
+                        "resourceType": "MedicationRequest",
+                        "id": "med-uuid-2",
+                        "status": "active",
+                        "intent": "order",
+                        "medicationCodeableConcept": {
+                            "text": "Lisinopril 10mg",
+                        },
+                    },
+                }],
+            },
+            {"entry": []},
+        ]
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Lisinopril"},
+            source_reference="Encounter/1",
+            description="Add lisinopril",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        dup = [r for r in results if r.check_name == "medication_duplicate"]
+        assert len(dup) == 1, (
+            "Duplicate check must detect 'Lisinopril' in medicationCodeableConcept.text"
+        )
+        assert dup[0].passed is False
+
+
+class TestAllergyConflictRealisticFHIR:
+    """Allergy cross-check against realistic OpenEMR FHIR AllergyIntolerance."""
+
+    @pytest.mark.asyncio
+    async def test_allergy_conflict_with_real_fhir_shape(self, mock_openemr_client):
+        """OpenEMR returns allergen in code.coding[].display, not flat 'substance'."""
+        mock_openemr_client.fhir_read.side_effect = [
+            {"entry": []},  # MedicationRequest — empty
+            {  # AllergyIntolerance bundle — realistic OpenEMR shape
+                "resourceType": "Bundle",
+                "total": 1,
+                "entry": [{
+                    "resource": {
+                        "resourceType": "AllergyIntolerance",
+                        "id": "allergy-uuid-1",
+                        "clinicalStatus": {
+                            "coding": [{"code": "active"}],
+                        },
+                        "category": ["medication"],
+                        "criticality": "high",
+                        "code": {
+                            "coding": [{
+                                "system": "http://snomed.info/sct",
+                                "code": "372687004",
+                                "display": "Amoxicillin",
+                            }],
+                        },
+                        "patient": {"reference": "Patient/patient-123"},
+                    },
+                }],
+            },
+        ]
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Amoxicillin 500mg"},
+            source_reference="Encounter/1",
+            description="Add amoxicillin",
+        )
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        allergy = [r for r in results if r.check_name == "medication_allergy_conflict"]
+        assert len(allergy) == 1, (
+            "Allergy check must detect 'Amoxicillin' in code.coding[].display"
+        )
+        assert allergy[0].passed is False
+
+    @pytest.mark.asyncio
+    async def test_allergy_conflict_no_coding_only_narrative(self, mock_openemr_client):
+        """When code has no coding entries, OpenEMR uses data-absent-unknown.
+
+        In this case the allergy title is only in text.div (narrative HTML).
+        The check should gracefully handle this without crashing, even if
+        it can't detect the conflict.
+        """
+        mock_openemr_client.fhir_read.side_effect = [
+            {"entry": []},
+            {
+                "resourceType": "Bundle",
+                "total": 1,
+                "entry": [{
+                    "resource": {
+                        "resourceType": "AllergyIntolerance",
+                        "id": "allergy-uuid-2",
+                        "code": {
+                            "coding": [{
+                                "system": "http://terminology.hl7.org/CodeSystem/data-absent-reason",
+                                "code": "unknown",
+                                "display": "Unknown",
+                            }],
+                        },
+                        "text": {
+                            "status": "additional",
+                            "div": "<div>Penicillin</div>",
+                        },
+                        "patient": {"reference": "Patient/patient-123"},
+                    },
+                }],
+            },
+        ]
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.CREATE,
+            proposed_value={"drug": "Penicillin V 500mg"},
+            source_reference="Encounter/1",
+            description="Add penicillin",
+        )
+        # Should not crash regardless of whether it detects the conflict
+        results = await check_medication_safety(item, mock_openemr_client, "patient-123")
+        assert isinstance(results, list)

@@ -344,12 +344,7 @@ async def check_medication_safety(
         )
         for entry in (med_bundle or {}).get("entry", []):
             resource = entry.get("resource", {})
-            existing_drug = (
-                resource.get("drug")
-                or resource.get("title")
-                or resource.get("display")
-                or ""
-            )
+            existing_drug = _extract_medication_name(resource)
             if existing_drug and drug_name_lower in existing_drug.lower():
                 results.append(
                     VerificationResult(
@@ -380,12 +375,7 @@ async def check_medication_safety(
         )
         for entry in (allergy_bundle or {}).get("entry", []):
             resource = entry.get("resource", {})
-            substance = (
-                resource.get("substance")
-                or resource.get("display")
-                or resource.get("code", {}).get("text")
-                or ""
-            )
+            substance = _extract_allergen_name(resource)
             if substance and substance.lower() in drug_name_lower:
                 results.append(
                     VerificationResult(
@@ -460,6 +450,41 @@ async def verify_manifest(
 
 
 verify_manifest = trace_verification(trace.get_tracer("openemr-agent"))(verify_manifest)
+
+
+def _extract_medication_name(resource: dict[str, Any]) -> str:
+    """Extract a human-readable drug name from a FHIR MedicationRequest resource.
+
+    OpenEMR returns the drug name in ``medicationCodeableConcept`` — either as
+    ``coding[].display`` (when an RxNorm code exists) or ``text`` (plain name
+    fallback).  Also checks legacy flat fields for backwards compatibility.
+    """
+    med_concept = resource.get("medicationCodeableConcept")
+    if isinstance(med_concept, dict):
+        for coding in med_concept.get("coding", []):
+            if isinstance(coding, dict) and coding.get("display"):
+                return coding["display"]
+        if med_concept.get("text"):
+            return med_concept["text"]
+    return resource.get("drug") or resource.get("title") or resource.get("display") or ""
+
+
+def _extract_allergen_name(resource: dict[str, Any]) -> str:
+    """Extract the allergen/substance name from a FHIR AllergyIntolerance resource.
+
+    OpenEMR stores the allergen in ``code.coding[].display``.  Falls back to
+    ``code.text`` and legacy flat fields for backwards compatibility.
+    """
+    code = resource.get("code")
+    if isinstance(code, dict):
+        for coding in code.get("coding", []):
+            if isinstance(coding, dict) and coding.get("display"):
+                display = coding["display"]
+                if display and display.lower() != "unknown":
+                    return display
+        if code.get("text"):
+            return code["text"]
+    return resource.get("substance") or resource.get("display") or ""
 
 
 def _extract_code(code_value: Any) -> str | None:
