@@ -83,43 +83,33 @@ ON DUPLICATE KEY UPDATE `title` = VALUES(`title`);
 
 
 -- ============================================================
--- Lab results (procedure_result + procedure_order + procedure_report)
--- OpenEMR lab flow: procedure_order -> procedure_report -> procedure_result
--- Simplified: insert minimal linked records.
+-- Lab results (procedure_order_code required for FHIR Observation)
+-- OpenEMR lab flow: procedure_order -> procedure_order_code
+--                                   -> procedure_report (joined via procedure_order_seq)
+--                                   -> procedure_result
+-- The Synthea demo data already provides procedure_order, procedure_report,
+-- and procedure_result for our seed patients. The ONLY missing piece is
+-- procedure_order_code — without it the FHIR /Observation endpoint returns
+-- zero results because the join chain breaks.
 -- ============================================================
 
-INSERT INTO `procedure_order` (
-  `procedure_order_id`, `patient_id`, `date_ordered`, `order_status`
-) VALUES
-(1, 4, '2025-01-10', 'complete'),
-(2, 4, '2025-07-15', 'complete'),
-(3, 5, '2025-02-20', 'complete'),
-(4, 6, '2025-03-05', 'complete')
-ON DUPLICATE KEY UPDATE `order_status` = VALUES(`order_status`);
+-- Maria Santos (pid=4): HbA1c panel code
+INSERT IGNORE INTO `procedure_order_code`
+  (`procedure_order_id`, `procedure_order_seq`, `procedure_code`, `procedure_name`, `procedure_source`)
+SELECT `procedure_order_id`, 1, '4548-4', 'Hemoglobin A1c', '1'
+FROM `procedure_order` WHERE `patient_id` = 4;
 
-INSERT INTO `procedure_report` (
-  `procedure_report_id`, `procedure_order_id`, `date_report`, `report_status`
-) VALUES
-(1, 1, '2025-01-10', 'final'),
-(2, 2, '2025-07-15', 'final'),
-(3, 3, '2025-02-20', 'final'),
-(4, 4, '2025-03-05', 'final')
-ON DUPLICATE KEY UPDATE `report_status` = VALUES(`report_status`);
+-- James Kowalski (pid=5): BNP panel code
+INSERT IGNORE INTO `procedure_order_code`
+  (`procedure_order_id`, `procedure_order_seq`, `procedure_code`, `procedure_name`, `procedure_source`)
+SELECT `procedure_order_id`, 1, '42637-9', 'Natriuretic peptide B (BNP)', '1'
+FROM `procedure_order` WHERE `patient_id` = 5;
 
-INSERT INTO `procedure_result` (
-  `procedure_result_id`, `procedure_report_id`, `result_code`, `result_text`,
-  `result`, `units`, `range`, `abnormal`, `result_status`
-) VALUES
--- Maria Santos: HbA1c trending
-(1, 1, '4548-4', 'Hemoglobin A1c', '7.8', '%', '4.0-5.6', 'high', 'final'),
-(2, 2, 'Hemoglobin A1c', 'Hemoglobin A1c', '8.2', '%', '4.0-5.6', 'high', 'final'),
-
--- James Kowalski: BNP (heart failure marker)
-(3, 3, '42637-9', 'BNP', '385', 'pg/mL', '0-100', 'high', 'final'),
-
--- Aisha Patel: TSH
-(4, 4, '11579-0', 'TSH', '6.8', 'mIU/L', '0.4-4.0', 'high', 'final')
-ON DUPLICATE KEY UPDATE `result` = VALUES(`result`);
+-- Aisha Patel (pid=6): TSH panel code
+INSERT IGNORE INTO `procedure_order_code`
+  (`procedure_order_id`, `procedure_order_seq`, `procedure_code`, `procedure_name`, `procedure_source`)
+SELECT `procedure_order_id`, 1, '11579-0', 'Thyrotropin [Units/volume] in Serum', '1'
+FROM `procedure_order` WHERE `patient_id` = 6;
 
 
 -- ============================================================

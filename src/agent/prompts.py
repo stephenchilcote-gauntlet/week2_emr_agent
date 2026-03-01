@@ -276,7 +276,11 @@ TOOL_DEFINITIONS: list[dict] = [
             "Condition?clinical-status=active returns zero results even when "
             "active conditions exist. Always omit clinical-status when "
             "searching Condition and inspect the clinicalStatus field in the "
-            "returned resources instead."
+            "returned resources instead. "
+            "For lab results (HbA1c, TSH, BNP, creatinine, lipids, etc.), "
+            "use resource_type='Observation' with params={'patient': '<uuid>', "
+            "'category': 'laboratory'}. The patient UUID is available from "
+            "a prior fhir_read Patient search or from the current context."
         ),
         "input_schema": {
             "type": "object",

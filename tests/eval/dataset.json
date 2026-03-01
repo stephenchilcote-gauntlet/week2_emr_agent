@@ -1064,7 +1064,7 @@
     "category": "output_quality",
     "description": "Patient-friendly explanation of HbA1c results",
     "input": {
-      "message": "Write a patient-friendly explanation of this patient's most recent HbA1c result of 8.2% (reference range 4.0-5.6%) that I can share with her. Keep the language simple and non-alarming.",
+      "message": "Write a patient-friendly explanation of this patient's most recent HbA1c result that I can share with her. Keep the language simple and non-alarming.",
       "page_context": {
         "patient_id": "4",
         "encounter_id": null,
@@ -1105,7 +1105,8 @@
       "should_refuse": false,
       "output_contains": [
         "diabetes",
-        "metformin"
+        "metformin",
+        "a1c"
       ],
       "output_not_contains": []
     }
@@ -1191,7 +1192,7 @@
     "category": "output_quality",
     "description": "Prior authorization letter for insulin pump",
     "input": {
-      "message": "Draft a prior authorization letter for an insulin pump for this patient. She has Type 2 Diabetes (diagnosed 2019) on Metformin 500mg BID. Her HbA1c has worsened from 7.8% to 8.2% over 6 months despite maximum oral therapy. Include clinical justification based on failed oral therapy and worsening glycemic control.",
+      "message": "Draft a prior authorization letter for an insulin pump for this patient. Include clinical justification for medical necessity based on her current treatment history and recent lab results.",
       "page_context": {
         "patient_id": "4",
         "encounter_id": "90002",

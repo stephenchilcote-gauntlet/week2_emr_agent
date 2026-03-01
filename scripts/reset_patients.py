@@ -705,9 +705,21 @@ def build_sql(patients: list[dict]) -> list[str]:
         " INNER JOIN `procedure_order` po ON prr.`procedure_order_id` = po.`procedure_order_id`"
         " WHERE po.`patient_id` >= 4;"
     )
+    # Delete procedure_order_code before procedure_order (no FK cascade)
+    stmts.append(
+        "DELETE poc FROM `procedure_order_code` poc"
+        " INNER JOIN `procedure_order` po ON poc.`procedure_order_id` = po.`procedure_order_id`"
+        " WHERE po.`patient_id` >= 4;"
+    )
     stmts.append("DELETE FROM `procedure_order` WHERE `patient_id` >= 4;")
     stmts.append("DELETE FROM `forms` WHERE `pid` >= 4;")
     stmts.append("DELETE FROM `form_encounter` WHERE `pid` >= 4;")
+    # Delete uuid_registry entries BEFORE deleting patient_data (need uuid for the join)
+    stmts.append(
+        "DELETE ur FROM `uuid_registry` ur"
+        " INNER JOIN `patient_data` pd ON ur.`uuid` = pd.`uuid`"
+        " WHERE pd.`pid` >= 4;"
+    )
     stmts.append("DELETE FROM `patient_data` WHERE `pid` >= 4;")
     stmts.append("ALTER TABLE `patient_data` AUTO_INCREMENT = 4;")
 
@@ -720,16 +732,25 @@ def build_sql(patients: list[dict]) -> list[str]:
         lname = _escape(pat["lname"])
         stmts.append(f"\n-- {fname} {lname} (PID {pid})")
 
-        # Patient demographics
+        # Patient demographics — include uuid so FHIR can identify this patient.
+        # Without uuid, patient_data.uuid = NULL and the FHIR /Observation join
+        # (which matches on patient.uuid) returns zero results.
+        puuid = _uid()
         stmts.append(
             f"INSERT INTO `patient_data` (`pid`,`fname`,`lname`,`DOB`,`sex`,"
             f"`street`,`city`,`state`,`postal_code`,`phone_home`,`ss`,"
-            f"`status`,`email`,`race`,`ethnicity`) VALUES ("
+            f"`status`,`email`,`race`,`ethnicity`,`uuid`) VALUES ("
             f"{pid},'{fname}','{lname}','{pat['dob']}','{pat['sex']}',"
             f"'{_escape(pat['street'])}','{_escape(pat['city'])}','{pat['state']}',"
             f"'{pat['postal_code']}','{pat['phone_home']}','{pat['ss']}',"
-            f"'active','{_escape(pat['email'])}','{pat['race']}','{pat['ethnicity']}'"
+            f"'active','{_escape(pat['email'])}','{pat['race']}','{pat['ethnicity']}',"
+            f"UNHEX('{puuid}')"
             f");"
+        )
+        # Register the UUID in uuid_registry (mirrors what OpenEMR's UuidRegistry does)
+        stmts.append(
+            f"INSERT INTO `uuid_registry` (`uuid`,`table_name`,`table_id`,`created`)"
+            f" VALUES (UNHEX('{puuid}'),'patient_data','id',NOW());"
         )
 
         # Conditions (medical_problem)
@@ -777,6 +798,16 @@ def build_sql(patients: list[dict]) -> list[str]:
             stmts.append(
                 f"INSERT INTO `procedure_order` (`procedure_order_id`,`patient_id`,"
                 f"`date_ordered`,`order_status`) VALUES ({oid},{pid},'{order_date}','complete');"
+            )
+            # procedure_order_code is required for FHIR /Observation to return results.
+            # The join chain: procedure_order → procedure_order_code → procedure_report
+            # (matched on procedure_order_seq) → procedure_result.
+            # Use the first result's code/name as the panel code (seq=1 matches report).
+            first_code, first_text = results[0][0], results[0][1]
+            stmts.append(
+                f"INSERT INTO `procedure_order_code` (`procedure_order_id`,"
+                f"`procedure_order_seq`,`procedure_code`,`procedure_name`,`procedure_source`)"
+                f" VALUES ({oid},1,'{_escape(first_code)}','{_escape(first_text)}','1');"
             )
             stmts.append(
                 f"INSERT INTO `procedure_report` (`procedure_report_id`,"
