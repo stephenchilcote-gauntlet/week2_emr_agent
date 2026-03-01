@@ -27,6 +27,7 @@ from .schemas import (
     ApprovalResponse,
     ChatRequest,
     ChatResponse,
+    FeedbackRequest,
     HealthResponse,
     ManifestResponse,
 )
@@ -488,6 +489,23 @@ async def get_session_audit(
     audit_store: AuditStore = app.state.audit_store
     events = audit_store.get_session_events(session_id)
     return [event.model_dump() for event in events]
+
+
+@app.post("/api/sessions/{session_id}/feedback", status_code=204)
+async def submit_feedback(
+    session_id: str,
+    req: FeedbackRequest,
+    user_id: str = Depends(_require_user_id),
+) -> None:
+    _get_session(session_id, user_id, app.state.session_store)
+    audit_store: AuditStore = app.state.audit_store
+    audit_store.record(AuditEvent(
+        session_id=session_id,
+        user_id=user_id,
+        event_type="message_feedback",
+        summary=f"User rated message {req.message_index} as {req.rating}",
+        details={"message_index": req.message_index, "rating": req.rating},
+    ))
 
 
 @app.get("/api/manifest/{session_id}", response_model=ManifestResponse)

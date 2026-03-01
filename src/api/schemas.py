@@ -55,6 +55,11 @@ class ManifestResponse(BaseModel):
     manifest: dict[str, Any] | None = None
 
 
+class FeedbackRequest(BaseModel):
+    message_index: int
+    rating: str  # "up" or "down"
+
+
 class HealthResponse(BaseModel):
     status: str
     openemr_connected: bool
