@@ -41,8 +41,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--api-url",
-        default="https://emragent.404.mn",
-        help="Remote agent API base URL (default: https://emragent.404.mn). "
+        default="https://emragent.404.mn/agent-api",
+        help="Remote agent API base URL (default: https://emragent.404.mn/agent-api). "
              "When set, fetches session data from the API instead of local SQLite.",
     )
     parser.add_argument(

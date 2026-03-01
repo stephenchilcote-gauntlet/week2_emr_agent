@@ -119,7 +119,8 @@ $ch = curl_init($targetUrl);
 curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
-curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+curl_setopt($ch, CURLOPT_TIMEOUT, 180);
 
 $headers = [
     'openemr_user_id: ' . $userId,
