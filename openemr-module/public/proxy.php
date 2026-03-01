@@ -45,21 +45,7 @@ $userId = (string)($_SESSION['authUserID'] ?? $_SESSION['authUser'] ?? '');
 if ($userId === '') {
     $token = $_SERVER['HTTP_X_SIDEBAR_TOKEN'] ?? '';
     if ($token !== '') {
-        $decoded = base64_decode($token, true);
-        if ($decoded !== false) {
-            $parts = explode(':', $decoded, 3);
-            if (count($parts) === 3) {
-                [$tokenUser, $tokenExpires, $tokenSig] = $parts;
-                $keyFile = $GLOBALS['OE_SITE_DIR'] . '/documents/certificates/oaprivate.key';
-                if (file_exists($keyFile)) {
-                    $key = file_get_contents($keyFile);
-                    $expected = hash_hmac('sha256', $tokenUser . ':' . $tokenExpires, $key);
-                    if (hash_equals($expected, $tokenSig) && time() < (int)$tokenExpires) {
-                        $userId = $tokenUser;
-                    }
-                }
-            }
-        }
+        $userId = \OpenEMR\Modules\ClinicalAssistant\HmacAuth::validateToken($token);
     }
 }
 

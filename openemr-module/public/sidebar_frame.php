@@ -24,8 +24,6 @@ if (empty($_SESSION['authUserID']) && empty($_SESSION['authUser'])) {
     exit;
 }
 
-require_once __DIR__ . '/../../../../globals.php';
-
 $assetBase = $GLOBALS['web_root'] . '/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets';
 $site = $_GET['site'] ?? 'default';
 
@@ -37,14 +35,7 @@ $site = $_GET['site'] ?? 'default';
 $sidebarAuthToken = '';
 $authUserId = (string)($_SESSION['authUserID'] ?? $_SESSION['authUser'] ?? '');
 if ($authUserId !== '') {
-    $keyFile = $GLOBALS['OE_SITE_DIR'] . '/documents/certificates/oaprivate.key';
-    if (file_exists($keyFile)) {
-        $key = file_get_contents($keyFile);
-        $expires = time() + 7200; // 2 hours (matches OpenEMR session timeout)
-        $payload = $authUserId . ':' . $expires;
-        $signature = hash_hmac('sha256', $payload, $key);
-        $sidebarAuthToken = base64_encode($payload . ':' . $signature);
-    }
+    $sidebarAuthToken = \OpenEMR\Modules\ClinicalAssistant\HmacAuth::createToken($authUserId);
 }
 
 // Resolve patient context from the PHP session for the sidebar header
