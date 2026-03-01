@@ -455,3 +455,124 @@ def test_truncate_tool_content_json_dict_without_entry_key() -> None:
     content = json.dumps(data)
     result = AgentLoop._truncate_tool_content(content)
     assert result.endswith("\n… (truncated)")
+
+
+# ------------------------------------------------------------------
+# open_patient_chart tool
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_open_patient_chart_sets_session_state() -> None:
+    """open_patient_chart should resolve FHIR UUID → OpenEMR PID and update session."""
+    openemr_client = AsyncMock()
+    openemr_client.fhir_read = AsyncMock(return_value={
+        "resourceType": "Patient",
+        "id": "abc-123-uuid",
+        "identifier": [
+            {
+                "type": {"coding": [{"code": "PT"}]},
+                "value": "7",
+            }
+        ],
+        "name": [{"given": ["Robert"], "family": "Chen"}],
+    })
+    loop = _make_loop(openemr_client, [])
+    session = AgentSession()
+
+    tc = ToolCall(id="t1", name="open_patient_chart", arguments={"patient_uuid": "abc-123-uuid"})
+    result = await loop._execute_tool(tc, session)
+
+    parsed = json.loads(result.content)
+    assert not result.is_error
+    assert parsed["status"] == "patient_chart_opened"
+    assert parsed["openemr_pid"] == "7"
+    assert parsed["patient_name"] == "Robert Chen"
+    assert session.fhir_patient_id == "abc-123-uuid"
+    assert session.page_context is not None
+    assert session.page_context.patient_id == "7"
+    assert session.openemr_pid == "7"
+
+
+@pytest.mark.asyncio
+async def test_open_patient_chart_error_patient_not_found() -> None:
+    """open_patient_chart should return error when patient UUID is invalid."""
+    openemr_client = AsyncMock()
+    openemr_client.fhir_read = AsyncMock(return_value={
+        "error": "Resource not found",
+        "status_code": 404,
+    })
+    loop = _make_loop(openemr_client, [])
+    session = AgentSession()
+
+    tc = ToolCall(id="t1", name="open_patient_chart", arguments={"patient_uuid": "bad-uuid"})
+    result = await loop._execute_tool(tc, session)
+
+    assert result.is_error
+    parsed = json.loads(result.content)
+    assert "error" in parsed
+
+
+@pytest.mark.asyncio
+async def test_open_patient_chart_fallback_identifier() -> None:
+    """open_patient_chart should use first identifier when no PT-coded one exists."""
+    openemr_client = AsyncMock()
+    openemr_client.fhir_read = AsyncMock(return_value={
+        "resourceType": "Patient",
+        "id": "xyz-uuid",
+        "identifier": [{"value": "12"}],
+        "name": [{"given": ["Linda"], "family": "Martinez"}],
+    })
+    loop = _make_loop(openemr_client, [])
+    session = AgentSession()
+
+    tc = ToolCall(id="t1", name="open_patient_chart", arguments={"patient_uuid": "xyz-uuid"})
+    result = await loop._execute_tool(tc, session)
+
+    parsed = json.loads(result.content)
+    assert not result.is_error
+    assert parsed["openemr_pid"] == "12"
+    assert session.openemr_pid == "12"
+
+
+@pytest.mark.asyncio
+async def test_open_patient_chart_no_identifiers() -> None:
+    """open_patient_chart should error when FHIR Patient has no identifiers."""
+    openemr_client = AsyncMock()
+    openemr_client.fhir_read = AsyncMock(return_value={
+        "resourceType": "Patient",
+        "id": "no-id-uuid",
+        "identifier": [],
+        "name": [{"given": ["Test"], "family": "Patient"}],
+    })
+    loop = _make_loop(openemr_client, [])
+    session = AgentSession()
+
+    tc = ToolCall(id="t1", name="open_patient_chart", arguments={"patient_uuid": "no-id-uuid"})
+    result = await loop._execute_tool(tc, session)
+
+    assert result.is_error
+    parsed = json.loads(result.content)
+    assert "Could not resolve" in parsed["error"]
+
+
+@pytest.mark.asyncio
+async def test_open_patient_chart_updates_existing_page_context() -> None:
+    """open_patient_chart should update existing page_context rather than replace it."""
+    openemr_client = AsyncMock()
+    openemr_client.fhir_read = AsyncMock(return_value={
+        "resourceType": "Patient",
+        "id": "new-uuid",
+        "identifier": [{"type": {"coding": [{"code": "PT"}]}, "value": "9"}],
+        "name": [{"given": ["Michael"], "family": "Thompson"}],
+    })
+    loop = _make_loop(openemr_client, [])
+    session = AgentSession()
+    session.page_context = PageContext(patient_id="4", page_type="patient_summary")
+
+    tc = ToolCall(id="t1", name="open_patient_chart", arguments={"patient_uuid": "new-uuid"})
+    result = await loop._execute_tool(tc, session)
+
+    assert not result.is_error
+    assert session.page_context.patient_id == "9"
+    assert session.page_context.page_type == "patient_summary"  # preserved
