@@ -23,6 +23,8 @@
     },
     Encounter: { tab: "enc", container: ".table.jumbotron", navigateUrl: "/interface/patient_file/history/encounters.php", supportsRowTarget: true },
     Observation: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
+    // NB: #vitals_ps_expand content is async-loaded via placeHtml("vitals_fragment.php").
+    // If vitals overlays break on initial load, check timing against that async fetch.
     Vital: { tab: "pat", container: "#vitals_ps_expand", supportsRowTarget: true },
     SoapNote: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
     Procedure: { tab: "enc", nestedFrame: "enc-forms", container: "#partable", supportsRowTarget: true },
@@ -49,8 +51,14 @@
     if (!frameDoc || !mapping.nestedFrame) return frameDoc
     try {
       var innerFrame = frameDoc.querySelector("iframe[name='" + mapping.nestedFrame + "']")
+      if (!innerFrame) {
+        // Named iframe not found — encounter_top.php renders the forms.php
+        // Summary tab via TabsWrapper without a name attribute on the iframe.
+        // Look for the iframe inside the active tab pane instead.
+        innerFrame = frameDoc.querySelector(".tab-pane.active iframe")
+          || frameDoc.querySelector(".tab-pane iframe")
+      }
       if (innerFrame) {
-        // Nested iframe element exists — only use it if contentDocument is accessible
         if (innerFrame.contentDocument) {
           return innerFrame.contentDocument
         }
