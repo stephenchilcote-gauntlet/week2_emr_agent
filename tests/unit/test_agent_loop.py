@@ -467,15 +467,23 @@ async def test_open_patient_chart_sets_session_state() -> None:
     """open_patient_chart should resolve FHIR UUID → OpenEMR PID and update session."""
     openemr_client = AsyncMock()
     openemr_client.fhir_read = AsyncMock(return_value={
-        "resourceType": "Patient",
-        "id": "abc-123-uuid",
-        "identifier": [
-            {
-                "type": {"coding": [{"code": "PT"}]},
-                "value": "7",
+        "resourceType": "Bundle",
+        "type": "searchset",
+        "total": 1,
+        "entry": [{
+            "resource": {
+                "resourceType": "Patient",
+                "id": "abc-123-uuid",
+                "identifier": [
+                    {
+                        "type": {"coding": [{"code": "PT"}]},
+                        "value": "7",
+                    }
+                ],
+                "name": [{"given": ["Robert"], "family": "Chen"}],
+                "birthDate": "1952-08-19",
             }
-        ],
-        "name": [{"given": ["Robert"], "family": "Chen"}],
+        }],
     })
     loop = _make_loop(openemr_client, [])
     session = AgentSession()
@@ -492,6 +500,7 @@ async def test_open_patient_chart_sets_session_state() -> None:
     assert session.page_context is not None
     assert session.page_context.patient_id == "7"
     assert session.openemr_pid == "7"
+    assert session.navigate_to_patient == {"pid": "7", "pname": "Robert Chen", "dob": "1952-08-19"}
 
 
 @pytest.mark.asyncio
@@ -518,10 +527,13 @@ async def test_open_patient_chart_fallback_identifier() -> None:
     """open_patient_chart should use first identifier when no PT-coded one exists."""
     openemr_client = AsyncMock()
     openemr_client.fhir_read = AsyncMock(return_value={
-        "resourceType": "Patient",
-        "id": "xyz-uuid",
-        "identifier": [{"value": "12"}],
-        "name": [{"given": ["Linda"], "family": "Martinez"}],
+        "resourceType": "Bundle", "type": "searchset", "total": 1,
+        "entry": [{"resource": {
+            "resourceType": "Patient",
+            "id": "xyz-uuid",
+            "identifier": [{"value": "12"}],
+            "name": [{"given": ["Linda"], "family": "Martinez"}],
+        }}],
     })
     loop = _make_loop(openemr_client, [])
     session = AgentSession()
@@ -540,10 +552,13 @@ async def test_open_patient_chart_no_identifiers() -> None:
     """open_patient_chart should error when FHIR Patient has no identifiers."""
     openemr_client = AsyncMock()
     openemr_client.fhir_read = AsyncMock(return_value={
-        "resourceType": "Patient",
-        "id": "no-id-uuid",
-        "identifier": [],
-        "name": [{"given": ["Test"], "family": "Patient"}],
+        "resourceType": "Bundle", "type": "searchset", "total": 1,
+        "entry": [{"resource": {
+            "resourceType": "Patient",
+            "id": "no-id-uuid",
+            "identifier": [],
+            "name": [{"given": ["Test"], "family": "Patient"}],
+        }}],
     })
     loop = _make_loop(openemr_client, [])
     session = AgentSession()
@@ -561,10 +576,13 @@ async def test_open_patient_chart_updates_existing_page_context() -> None:
     """open_patient_chart should update existing page_context rather than replace it."""
     openemr_client = AsyncMock()
     openemr_client.fhir_read = AsyncMock(return_value={
-        "resourceType": "Patient",
-        "id": "new-uuid",
-        "identifier": [{"type": {"coding": [{"code": "PT"}]}, "value": "9"}],
-        "name": [{"given": ["Michael"], "family": "Thompson"}],
+        "resourceType": "Bundle", "type": "searchset", "total": 1,
+        "entry": [{"resource": {
+            "resourceType": "Patient",
+            "id": "new-uuid",
+            "identifier": [{"type": {"coding": [{"code": "PT"}]}, "value": "9"}],
+            "name": [{"given": ["Michael"], "family": "Thompson"}],
+        }}],
     })
     loop = _make_loop(openemr_client, [])
     session = AgentSession()

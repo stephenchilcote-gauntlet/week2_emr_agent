@@ -375,15 +375,25 @@ class AgentLoop:
 
             elif tool_call.name == "open_patient_chart":
                 patient_uuid = tool_call.arguments["patient_uuid"]
-                result = await self.openemr_client.fhir_read(
-                    f"Patient/{patient_uuid}"
+                # Use FHIR search (not direct read) — OpenEMR returns 403
+                # on GET Patient/{uuid} but allows search by _id.
+                bundle = await self.openemr_client.fhir_read(
+                    "Patient", {"_id": patient_uuid}
                 )
-                if "error" in result:
+                if "error" in bundle:
                     return ToolResult(
                         tool_call_id=tool_call.id,
-                        content=json.dumps({"error": f"Patient not found: {result.get('error')}"}),
+                        content=json.dumps({"error": f"Patient not found: {bundle.get('error')}"}),
                         is_error=True,
                     )
+                entries = bundle.get("entry", [])
+                if not entries:
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        content=json.dumps({"error": f"No patient found with UUID {patient_uuid}"}),
+                        is_error=True,
+                    )
+                result = entries[0].get("resource", {})
                 openemr_pid = None
                 for ident in result.get("identifier", []):
                     if ident.get("type", {}).get("coding", [{}])[0].get("code") == "PT":
