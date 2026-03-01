@@ -34,6 +34,7 @@ class ChatResponse(BaseModel):
     error: str | None = None
     tool_calls_summary: list[dict[str, Any]] | None = None
     openemr_pid: str | None = None
+    navigate_to_patient: dict[str, Any] | None = None
 
 
 class ApprovalRequest(BaseModel):

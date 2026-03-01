@@ -84,4 +84,5 @@ class AgentSession(BaseModel):
     openemr_user_id: str | None = None
     fhir_patient_id: str | None = None
     openemr_pid: str | None = None
+    navigate_to_patient: dict[str, str] | None = None
 

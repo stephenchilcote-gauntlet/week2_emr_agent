@@ -275,6 +275,10 @@ async def chat(
         details={"response_length": len(last_assistant)},
     ))
 
+    nav = session.navigate_to_patient
+    session.navigate_to_patient = None  # consume; one-shot signal
+    session_store.save(session)
+
     return ChatResponse(
         session_id=session.id,
         response=last_assistant,
@@ -282,6 +286,7 @@ async def chat(
         phase=session.phase,
         tool_calls_summary=_summarize_tool_calls(session),
         openemr_pid=session.openemr_pid,
+        navigate_to_patient=nav,
     )
 
 
@@ -326,6 +331,8 @@ async def get_messages(
         "session_id": session.id,
         "messages": [message.model_dump() for message in session.messages],
         "manifest": session.manifest.model_dump() if session.manifest else None,
+        "phase": session.phase,
+        "openemr_pid": session.openemr_pid,
     }
 
 

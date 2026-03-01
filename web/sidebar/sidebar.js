@@ -504,6 +504,7 @@ class SidebarApp {
       this.state.tourCardHeight = 0
       this.el.reviewCards.style.minHeight = ""
       this.renderReviewPanel()
+      this.setStatus(this.phaseToStatus(data.phase || "planning"))
       this.updateSessionDisplay()
       this.renderHistoryList()
       this.scrollToBottom(true)
@@ -591,6 +592,9 @@ class SidebarApp {
       this.el.reviewCards.style.minHeight = ""
       this.renderReviewPanel()
       this.setStatus(this.phaseToStatus(data.phase))
+      if (data.navigate_to_patient) {
+        this.navigateToPatient(data.navigate_to_patient)
+      }
       await this.loadSessionList()
     } catch (error) {
       this.hideTypingIndicator()
@@ -1020,6 +1024,18 @@ class SidebarApp {
     if (newIndex < 0 || newIndex >= manifest.items.length) return
     this.state.tourIndex = newIndex
     this.renderReviewPanel()
+  }
+
+  navigateToPatient(nav) {
+    const { pid, pname, dob } = nav
+    try {
+      const parent = window.parent || window
+      if (parent.left_nav && typeof parent.left_nav.setPatient === "function") {
+        parent.left_nav.setPatient(pname || "", pid, pid, "", dob || "")
+      }
+    } catch (_e) {
+      // parent not accessible
+    }
   }
 
   postOverlayMessage(msg) {

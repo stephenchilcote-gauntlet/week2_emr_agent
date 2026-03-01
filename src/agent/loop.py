@@ -409,6 +409,12 @@ class AgentLoop:
                     given = " ".join(name.get("given", []))
                     family = name.get("family", "")
                     patient_name = f"{given} {family}".strip()
+                patient_dob = result.get("birthDate", "")
+                session.navigate_to_patient = {
+                    "pid": openemr_pid,
+                    "pname": patient_name,
+                    "dob": patient_dob,
+                }
                 return ToolResult(
                     tool_call_id=tool_call.id,
                     content=json.dumps({
