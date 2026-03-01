@@ -33,13 +33,17 @@ class OpenEMRClient:
         "user/Coverage.read "
         "user/Device.read "
         "user/Location.read "
+        "user/Appointment.read "
         # REST API write scopes (OpenEMR uses lowercase names)
         "user/patient.read user/patient.write "
         "user/medical_problem.read user/medical_problem.write "
         "user/allergy.read user/allergy.write "
         "user/medication.read user/medication.write "
         "user/encounter.read user/encounter.write "
-        "user/vital.read user/vital.write"
+        "user/vital.read user/vital.write "
+        "user/appointment.read user/appointment.write "
+        "user/surgery.read user/surgery.write "
+        "user/transaction.read user/transaction.write"
     )
 
     def __init__(
