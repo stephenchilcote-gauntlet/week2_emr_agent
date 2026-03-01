@@ -89,11 +89,14 @@ clinical DSL. This is compact and avoids verbose FHIR JSON.
 **Condition**: `code` (ICD-10), `display` (name), `onset` (date), \
 `status` (default: "active")
 **MedicationRequest**: `drug` (name), `dose`, `freq`, `route`, \
-`rxnorm` (code)
+`rxnorm` (code), `diagnosis` (indication, e.g. "Type 2 diabetes")
 **AllergyIntolerance**: `substance`, `reaction`, `severity`, `criticality`
 **Observation**: `loinc` (code), `value`, `unit`, `date`
 **DocumentReference**: `doctype` (type name), `content` (note text)
 **CarePlan**: `category`, `content` (description)
+**Encounter**: `category` (pc_catid), `reason`, `date`, `onset`, \
+`facility`, `sensitivity` (default "normal"), `class_code` \
+(default "AMB"; options: "AMB" ambulatory, "IMP" inpatient, "EMER" emergency)
 **ServiceRequest**: `code` (LOINC/CPT), `display` (name), `category` \
 (e.g., "laboratory", "imaging")
 **SoapNote**: `subjective`, `objective`, `assessment`, `plan` \

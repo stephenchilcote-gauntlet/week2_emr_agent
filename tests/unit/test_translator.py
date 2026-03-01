@@ -53,6 +53,26 @@ class TestConditionRest:
         assert "occurrence" not in result
         assert "outcome" not in result
 
+    def test_condition_default_begdate_is_date_only(self):
+        """ConditionValidator requires Y-m-d format, not Y-m-d H:i:s."""
+        from datetime import date
+        item = _make_item(
+            action="add",
+            description="Add condition",
+            attrs={"code": "I10", "display": "Hypertension"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["begdate"] == date.today().isoformat()
+        assert " " not in result["begdate"]  # no time component
+
+    def test_condition_strips_time_from_onset(self):
+        """If onset includes a time component, it should be stripped."""
+        item = _make_item(
+            attrs={"code": "I10", "display": "HTN", "onset": "2024-01-15 00:00:00"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["begdate"] == "2024-01-15"
+
     def test_unsupported_resource_raises(self):
         item = _make_item(resource_type="CarePlan")
         with pytest.raises(ValueError, match="No OpenEMR REST builder"):
@@ -70,7 +90,9 @@ class TestMedicationRest:
         )
         result = to_openemr_rest(item, PATIENT_UUID)
         assert result["title"] == "Metformin 500mg oral"
-        assert result["comments"] == "Start metformin"
+        # comments is NOT stored by ListService — only title, begdate,
+        # enddate, diagnosis are written to the database
+        assert "comments" not in result
 
     def test_new_medication_defaults_begdate_to_today(self):
         from datetime import date
@@ -115,7 +137,8 @@ class TestAllergyRest:
         )
         result = to_openemr_rest(item, PATIENT_UUID)
         assert result["title"] == "Penicillin"
-        assert result["begdate"] == "2020-01-01"
+        # AllergyIntoleranceValidator requires Y-m-d H:i:s format
+        assert result["begdate"] == "2020-01-01 00:00:00"
         assert result["comments"] == "Penicillin allergy"
 
 
@@ -130,9 +153,19 @@ class TestEncounterRest:
         )
         result = to_openemr_rest(item, PATIENT_UUID)
         assert result["pc_catid"] == "5"
+        assert result["class_code"] == "AMB"
         assert result["reason"] == "Checkup"
         assert result["date"] == "2024-06-01"
         assert result["sensitivity"] == "normal"
+
+    def test_custom_class_code(self):
+        item = _make_item(
+            resource_type="Encounter",
+            description="ER visit",
+            attrs={"class_code": "EMER", "reason": "Chest pain"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["class_code"] == "EMER"
 
     def test_reason_defaults_to_description(self):
         item = _make_item(

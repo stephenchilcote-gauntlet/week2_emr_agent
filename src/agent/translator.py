@@ -8,6 +8,7 @@ API payloads.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .dsl import DslItem
@@ -126,6 +127,41 @@ def _date_or_none(value: str | None) -> str | None:
     return None
 
 
+_DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+_DATETIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})")
+
+
+def _as_date(value: str | None) -> str | None:
+    """Normalize a date value to ``Y-m-d`` format (no time component).
+
+    ConditionValidator uses ``datetime('Y-m-d')`` which performs a strict
+    round-trip comparison — ``"2024-01-15 00:00:00"`` is rejected.
+    """
+    value = _date_or_none(value)
+    if not value:
+        return None
+    m = _DATE_PREFIX_RE.match(value)
+    return m.group(1) if m else value
+
+
+def _as_datetime(value: str | None) -> str | None:
+    """Normalize a date value to ``Y-m-d H:i:s`` format.
+
+    AllergyIntoleranceValidator and ListService (medication) use
+    ``datetime('Y-m-d H:i:s')`` which rejects bare ``"2024-01-15"``.
+    """
+    value = _date_or_none(value)
+    if not value:
+        return None
+    m = _DATETIME_RE.match(value)
+    if m:
+        return f"{m.group(1)} {m.group(2)}"
+    m2 = _DATE_PREFIX_RE.match(value)
+    if m2:
+        return f"{m2.group(1)} 00:00:00"
+    return value
+
+
 def _build_condition_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     """Build an OpenEMR REST medical_problem payload from DSL attributes.
 
@@ -133,26 +169,30 @@ def _build_condition_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     """
     attrs = item.attrs
 
-    begdate = _date_or_none(attrs.get("onset"))
+    begdate = _as_date(attrs.get("onset"))
     if not begdate and item.action == "add":
         from datetime import date
-        begdate = date.today().isoformat() + " 00:00:00"
+        begdate = date.today().isoformat()
 
     # ConditionRestController whitelist: title, begdate, enddate, diagnosis.
+    # ConditionValidator requires begdate in Y-m-d format (no time component).
     # Other fields (occurrence, outcome, comments) are silently dropped.
     return {
         "title": attrs.get("display", ""),
         "diagnosis": f"ICD10:{attrs.get('code', '')}",
         "begdate": begdate,
-        "enddate": _date_or_none(attrs.get("enddate")),
+        "enddate": _as_date(attrs.get("enddate")),
     }
 
 
 def _build_medication_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     """Build an OpenEMR REST medication payload from DSL attributes.
 
-    Maps to: POST/PUT /apis/default/api/patient/{uuid}/medication
-    Schema: title (required), begdate (required), enddate, diagnosis
+    Maps to: POST/PUT /apis/default/api/patient/{pid}/medication
+    Schema: title (required), begdate (required), enddate, diagnosis.
+    ListService uses ``datetime('Y-m-d H:i:s')`` for date validation.
+    Note: ``comments`` is NOT stored by ListService — only the four
+    fields above are written to the database.
     """
     attrs = item.attrs
     drug = attrs.get("drug", "") or attrs.get("display", "") or attrs.get("title", "")
@@ -170,41 +210,42 @@ def _build_medication_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
         if route:
             title = f"{title} {route}".strip()
 
-    begdate = _date_or_none(attrs.get("begdate"))
+    begdate = _as_datetime(attrs.get("begdate"))
     if not begdate and item.action == "add":
         from datetime import date
-        begdate = date.today().isoformat() + " 00:00:00"
+        begdate = f"{date.today().isoformat()} 00:00:00"
 
-    enddate = _date_or_none(attrs.get("enddate"))
+    enddate = _as_datetime(attrs.get("enddate"))
     if attrs.get("status") == "stopped" and not enddate:
         from datetime import date
-        enddate = date.today().isoformat() + " 00:00:00"
+        enddate = f"{date.today().isoformat()} 00:00:00"
 
     return {
         "title": title,
         "begdate": begdate,
         "enddate": enddate,
-        "comments": item.description,
+        "diagnosis": _date_or_none(attrs.get("diagnosis")),
     }
 
 
 def _build_allergy_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     """Build an OpenEMR REST allergy payload from DSL attributes.
 
-    Maps to: POST/PUT /apis/default/api/patient/{uuid}/allergy
-    Schema: title (required), begdate (required), enddate, diagnosis
+    Maps to: POST/PUT /apis/default/api/patient/{puuid}/allergy
+    Schema: title (required), begdate, enddate, diagnosis, comments.
+    AllergyIntoleranceValidator uses ``datetime('Y-m-d H:i:s')`` for dates.
     """
     attrs = item.attrs
 
-    begdate = _date_or_none(attrs.get("begdate") or attrs.get("onset"))
+    begdate = _as_datetime(attrs.get("begdate") or attrs.get("onset"))
     if not begdate and item.action == "add":
         from datetime import date
-        begdate = date.today().isoformat() + " 00:00:00"
+        begdate = f"{date.today().isoformat()} 00:00:00"
 
     return {
         "title": attrs.get("substance", "") or attrs.get("display", "") or attrs.get("title", ""),
         "begdate": begdate,
-        "enddate": _date_or_none(attrs.get("enddate")),
+        "enddate": _as_datetime(attrs.get("enddate")),
         "comments": item.description,
     }
 
@@ -212,12 +253,15 @@ def _build_allergy_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
 def _build_encounter_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     """Build an OpenEMR REST encounter payload from DSL attributes.
 
-    Maps to: POST /apis/default/api/patient/{uuid}/encounter
+    Maps to: POST /apis/default/api/patient/{puuid}/encounter.
+    EncounterValidator requires ``class_code`` (validated against the
+    ``_ActEncounterCode`` list, e.g. ``AMB`` for ambulatory).
     """
     attrs = item.attrs
     description = item.description
     return {
         "pc_catid": attrs.get("category", ""),
+        "class_code": attrs.get("class_code", "AMB"),
         "reason": attrs.get("reason", description),
         "date": _date_or_none(attrs.get("date")),
         "onset_date": _date_or_none(attrs.get("onset")),

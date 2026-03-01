@@ -29,7 +29,8 @@ PATIENT_PID = "5"
 ENCOUNTER_FHIR_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 CONDITION_FHIR_UUID = "cccccccc-1111-2222-3333-444444444444"
 MED_FHIR_UUID = "dddddddd-1111-2222-3333-444444444444"
-TODAY = date.today().isoformat() + " 00:00:00"
+TODAY_DATE = date.today().isoformat()  # Y-m-d (for Condition)
+TODAY_DATETIME = date.today().isoformat() + " 00:00:00"  # Y-m-d H:i:s (for Medication/Allergy)
 
 
 def _make_loop(openemr_client: AsyncMock) -> AgentLoop:
@@ -94,7 +95,8 @@ class TestCreateCondition:
         payload = post_call.kwargs["payload"]
         assert payload["title"] == "Type 2 diabetes mellitus"
         assert payload["diagnosis"] == "ICD10:E11.9"
-        assert payload["begdate"] == TODAY
+        # ConditionValidator requires Y-m-d (no time component)
+        assert payload["begdate"] == TODAY_DATE
 
 
 class TestCreateMedicationRequest:
@@ -130,8 +132,10 @@ class TestCreateMedicationRequest:
         assert post_call.kwargs["method"] == "POST"
         payload = post_call.kwargs["payload"]
         assert payload["title"] == "Metformin 500mg oral"
-        assert payload["begdate"] == TODAY
-        assert payload["comments"] == "Start metformin for diabetes"
+        # ListService validates begdate as Y-m-d H:i:s
+        assert payload["begdate"] == TODAY_DATETIME
+        # ListService does NOT store comments — only title, begdate, enddate, diagnosis
+        assert "comments" not in payload
 
 
 # ==================================================================
@@ -231,7 +235,6 @@ class TestUpdateMedicationRequest:
         assert payload["title"] == "Metformin 1000mg"
         # Merged fields from cached record should be preserved
         assert payload["begdate"] == "2024-06-01 00:00:00"
-        assert payload["comments"] == "Increase metformin dose"
 
     @pytest.mark.asyncio
     async def test_update_medication_with_drug_name_uses_provided_title(self):
