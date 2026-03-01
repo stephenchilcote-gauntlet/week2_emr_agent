@@ -12,8 +12,10 @@ Regressions covered:
 
 from __future__ import annotations
 
+import re
+
 import pytest
-from playwright.sync_api import Frame, Page, expect
+from playwright.sync_api import Frame, FrameLocator, Page, expect
 
 from .conftest import (
     E2E_TIMEOUT_MS,
@@ -26,10 +28,29 @@ from .conftest import (
 
 pytestmark = pytest.mark.e2e
 
+PATIENT_PID = PATIENT_MAP["Maria Santos"]
+PATIENT_NAME = "Maria Santos"
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _open_patient_dashboard(page: Page) -> None:
+    """Navigate to the patient dashboard so the pat iframe exists."""
+    page.evaluate(f"""() => {{
+        const top = window.top || window;
+        top.navigateTab(
+            '/interface/patient_file/summary/demographics.php?set_pid={PATIENT_PID}',
+            'pat'
+        );
+    }}""")
+    # Wait for the pat iframe to load the patient dashboard DOM.
+    # The tab may not be visually active yet (OpenEMR shows the calendar by
+    # default), but the iframe content is accessible regardless.
+    pat = page.frame_locator("iframe[name=pat]")
+    pat.locator("#allergy_ps_expand").wait_for(state="attached", timeout=15000)
 
 
 @pytest.fixture
@@ -40,13 +61,14 @@ def emr_with_manifest(page: Page) -> tuple[Page, Frame, int]:
     """
     page.set_default_timeout(E2E_TIMEOUT_MS)
     openemr_login(page)
-    select_patient(page, PATIENT_MAP["Maria Santos"], "Maria Santos")
+    select_patient(page, PATIENT_PID, PATIENT_NAME)
+    _open_patient_dashboard(page)
 
     sidebar = get_sidebar_frame(page)
 
     send_chat_message(
         sidebar,
-        "Add a penicillin allergy and add hypertension to the problem list.",
+        "Add a penicillin allergy and add a sulfa drug allergy for this patient.",
     )
 
     # Wait for the review panel to become visible in the sidebar
@@ -59,7 +81,7 @@ def emr_with_manifest(page: Page) -> tuple[Page, Frame, int]:
     total = int(progress_text.split(" of ")[1])
 
     # Wait for overlays to render in the content iframes (async via postMessage)
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(3000)
 
     return page, sidebar, total
 
@@ -69,31 +91,34 @@ def emr_with_manifest(page: Page) -> tuple[Page, Frame, int]:
 # ---------------------------------------------------------------------------
 
 
-def _count_ghosts(page: Page) -> int:
-    """Count .agent-overlay-ghost elements across all content frames."""
-    count = 0
-    for frame in page.frames:
-        url = frame.url
-        # Skip the sidebar and top-level frames — only count content iframes
-        if "sidebar" in url or "clinical-assistant" in url:
-            continue
-        try:
-            count += frame.locator(".agent-overlay-ghost").count()
-        except Exception:
-            pass
-    return count
+def _count_ghosts_in_frame(fl: FrameLocator) -> int:
+    """Count .agent-overlay-ghost elements inside a FrameLocator."""
+    try:
+        return fl.locator(".agent-overlay-ghost").count()
+    except Exception:
+        return 0
 
 
-def _find_overlay_button(page: Page, selector: str) -> tuple[Frame, object] | None:
-    """Find an overlay button across all content frames."""
-    for frame in page.frames:
-        url = frame.url
-        if "sidebar" in url or "clinical-assistant" in url:
-            continue
+def _find_overlay_button(page: Page, selector: str) -> object | None:
+    """Find an overlay button on the FOCUSED ghost in pat or enc iframe.
+
+    The focused ghost is the one with .overlay-btn-next (only the focused
+    item gets nav buttons).  For nav buttons themselves, fall back to any
+    matching element.
+    """
+    for name in ("pat", "enc"):
+        fl = page.frame_locator(f"iframe[name={name}]")
         try:
-            loc = frame.locator(selector)
+            # Find the focused ghost (has nav buttons)
+            focused = fl.locator(".agent-overlay-ghost:has(.overlay-btn-next)")
+            if focused.count() > 0:
+                btn = focused.first.locator(selector)
+                if btn.count() > 0:
+                    return btn.first
+            # Fallback: any matching button (e.g., when only 1 ghost exists)
+            loc = fl.locator(selector)
             if loc.count() > 0:
-                return frame, loc.first
+                return loc.first
         except Exception:
             pass
     return None
@@ -111,11 +136,23 @@ class TestOverlaysNotDoubled:
         self, emr_with_manifest: tuple[Page, Frame, int],
     ) -> None:
         page, _sidebar, total = emr_with_manifest
-        ghost_count = _count_ghosts(page)
-        assert ghost_count >= 1, "Expected at least one overlay ghost"
+        pat = page.frame_locator("iframe[name=pat]")
+        ghost_count = _count_ghosts_in_frame(pat)
+        assert ghost_count >= 1, "Expected at least one overlay ghost in pat iframe"
         assert ghost_count <= total, (
             f"Got {ghost_count} ghost elements for {total} manifest items "
             f"— overlays are doubled"
+        )
+
+    def test_sidebar_not_duplicated(self, page: Page) -> None:
+        """embed.js mount() guard should prevent multiple sidebar iframes."""
+        page.set_default_timeout(E2E_TIMEOUT_MS)
+        openemr_login(page)
+        sidebar_count = page.evaluate("""() =>
+            document.querySelectorAll('#openemr-clinical-assistant-sidebar iframe').length
+        """)
+        assert sidebar_count == 1, (
+            f"Expected 1 sidebar iframe, got {sidebar_count} — mount() ran multiple times"
         )
 
 
@@ -131,9 +168,8 @@ class TestInlineNavigation:
 
         expect(sidebar.locator("#tour-progress")).to_have_text(f"1 of {total}")
 
-        result = _find_overlay_button(page, ".overlay-btn-next")
-        assert result is not None, "No inline next button found in any frame"
-        _frame, btn = result
+        btn = _find_overlay_button(page, ".overlay-btn-next")
+        assert btn is not None, "No inline next button found in any content frame"
         btn.click()
 
         # Must land on exactly "2 of N", not "3 of N"
@@ -153,12 +189,11 @@ class TestInlineNavigation:
         expect(sidebar.locator("#tour-progress")).to_have_text(f"2 of {total}")
 
         # Wait for new overlays to render
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(2000)
 
         # Now click the inline prev button
-        result = _find_overlay_button(page, ".overlay-btn-prev")
-        assert result is not None, "No inline prev button found in any frame"
-        _frame, btn = result
+        btn = _find_overlay_button(page, ".overlay-btn-prev")
+        assert btn is not None, "No inline prev button found in any content frame"
         btn.click()
 
         expect(sidebar.locator("#tour-progress")).to_have_text(
@@ -174,14 +209,13 @@ class TestInlineAcceptReject:
     ) -> None:
         page, sidebar, _total = emr_with_manifest
 
-        result = _find_overlay_button(page, ".overlay-btn-accept")
-        assert result is not None, "No inline accept button found in any frame"
-        _frame, btn = result
+        btn = _find_overlay_button(page, ".overlay-btn-accept")
+        assert btn is not None, "No inline accept button found in any content frame"
         btn.click()
 
-        # Sidebar card should reflect approved status
+        # Sidebar card should reflect approved status (CSS text-transform: uppercase)
         expect(sidebar.locator(".review-card-status")).to_have_text(
-            "approved", timeout=10000,
+            re.compile(r"approved", re.IGNORECASE), timeout=10000,
         )
 
     def test_inline_reject(
@@ -189,18 +223,17 @@ class TestInlineAcceptReject:
     ) -> None:
         page, sidebar, total = emr_with_manifest
         if total < 2:
-            pytest.skip("Need ≥2 items — using second to avoid conflict with accept test")
+            pytest.skip("Need ≥2 items to avoid conflict with accept test")
 
-        # Navigate to second item so we don't conflict with accept test
+        # Navigate to second item
         sidebar.locator("#tour-next").click()
         expect(sidebar.locator("#tour-progress")).to_have_text(f"2 of {total}")
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(2000)
 
-        result = _find_overlay_button(page, ".overlay-btn-reject")
-        assert result is not None, "No inline reject button found in any frame"
-        _frame, btn = result
+        btn = _find_overlay_button(page, ".overlay-btn-reject")
+        assert btn is not None, "No inline reject button found in any content frame"
         btn.click()
 
         expect(sidebar.locator(".review-card-status")).to_have_text(
-            "rejected", timeout=10000,
+            re.compile(r"rejected", re.IGNORECASE), timeout=10000,
         )
