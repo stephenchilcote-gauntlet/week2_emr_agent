@@ -13,7 +13,7 @@
         return;
     }
 
-    var SIDEBAR_WIDTH = 380;
+    var SIDEBAR_WIDTH = 475;
     var moduleRoot = '/interface/modules/custom_modules/oe-module-clinical-assistant/public';
     var site = new URLSearchParams(window.location.search).get('site') || 'default';
     var frameSrc = moduleRoot + '/sidebar_frame.php?site=' + encodeURIComponent(site);

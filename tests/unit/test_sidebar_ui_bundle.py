@@ -110,3 +110,75 @@ def test_sidebar_css_has_tour_and_confidence_styles() -> None:
     assert ".review-card-action-icon" in css
     assert ".review-card-description" in css
 
+
+# ---------------------------------------------------------------------------
+# Tool display name LUT
+# ---------------------------------------------------------------------------
+
+# Every tool registered in src/agent/prompts.py must have a human-readable
+# entry in the sidebar's TOOL_DISPLAY_NAMES lookup table so internal IDs
+# are never shown to clinicians.
+BACKEND_TOOL_NAMES = [
+    "fhir_read",
+    "openemr_api",
+    "get_page_context",
+    "submit_manifest",
+    "open_patient_chart",
+]
+
+
+def test_sidebar_js_has_tool_display_names_lut() -> None:
+    js = _read("web/sidebar/sidebar.js")
+    assert "TOOL_DISPLAY_NAMES" in js
+    assert "toolDisplayName" in js
+
+
+def test_sidebar_js_all_backend_tools_have_display_names() -> None:
+    """Every backend tool name must appear as a key in TOOL_DISPLAY_NAMES."""
+    js = _read("web/sidebar/sidebar.js")
+    for tool in BACKEND_TOOL_NAMES:
+        assert f'  {tool}:' in js, (
+            f"Tool '{tool}' is missing from TOOL_DISPLAY_NAMES in sidebar.js"
+        )
+
+
+def test_sidebar_js_tool_display_names_are_human_readable() -> None:
+    """Mapped values must be plain English phrases, not snake_case IDs."""
+    js = _read("web/sidebar/sidebar.js")
+    # Entries look like:  fhir_read: "Read patient record",
+    # We verify the raw IDs are NOT used as their own display labels by
+    # checking that each tool's entry maps to a value containing a space
+    # (snake_case names never have spaces; natural language phrases do).
+    import re
+    lut_match = re.search(
+        r'const TOOL_DISPLAY_NAMES\s*=\s*\{([^}]+)\}', js, re.DOTALL
+    )
+    assert lut_match, "Could not locate TOOL_DISPLAY_NAMES block in sidebar.js"
+    lut_body = lut_match.group(1)
+    for tool in BACKEND_TOOL_NAMES:
+        entry_match = re.search(
+            rf'{re.escape(tool)}:\s*"([^"]+)"', lut_body
+        )
+        assert entry_match, f"No entry for '{tool}' found in TOOL_DISPLAY_NAMES"
+        display = entry_match.group(1)
+        assert " " in display, (
+            f"Display name for '{tool}' looks like a raw ID (no spaces): '{display}'"
+        )
+
+
+def test_sidebar_js_renders_tool_display_name_in_meta() -> None:
+    """The meta summary line must use toolDisplayName(), not tool.name directly."""
+    js = _read("web/sidebar/sidebar.js")
+    assert "toolDisplayName(tool.name)" in js
+
+
+def test_sidebar_js_renders_tool_display_name_in_activity_list() -> None:
+    """The Activity detail list must also use toolDisplayName(), not tool.name."""
+    js = _read("web/sidebar/sidebar.js")
+    # Both the meta line and the <li> line call toolDisplayName(tool.name);
+    # count occurrences to ensure it appears in both rendering paths.
+    count = js.count("toolDisplayName(tool.name)")
+    assert count >= 2, (
+        f"Expected toolDisplayName(tool.name) in at least 2 places, found {count}"
+    )
+

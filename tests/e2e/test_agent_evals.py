@@ -59,6 +59,17 @@ def _send_eval_message(
         patient_name = case["input"].get("patient_name")
         encounter_id = pc.get("encounter_id")
         select_patient(page, pc["patient_id"], patient_name, encounter_id)
+        # Also update OPENEMR_SESSION_CONTEXT inside the sidebar iframe —
+        # this is Source 1 (higher priority than openemrAgentContext) and
+        # must be updated to prevent stale context from previous cases
+        # bleeding into this one.
+        sidebar.evaluate(f"""() => {{
+            if (window.OPENEMR_SESSION_CONTEXT) {{
+                window.OPENEMR_SESSION_CONTEXT.pid = {json.dumps(str(pc["patient_id"]))};
+                window.OPENEMR_SESSION_CONTEXT.patient_name = {json.dumps(patient_name or "")};
+                window.OPENEMR_SESSION_CONTEXT.encounter = {json.dumps(encounter_id)};
+            }}
+        }}""")
     else:
         # No patient context for this case — clear any patient selection from
         # a previous case so it doesn't bleed into this one.

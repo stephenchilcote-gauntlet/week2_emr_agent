@@ -14,6 +14,18 @@ const RESOURCE_DISPLAY_NAMES = {
   DiagnosticReport: "Reports",
 }
 
+const TOOL_DISPLAY_NAMES = {
+  fhir_read: "Read patient record",
+  openemr_api: "Query clinical data",
+  get_page_context: "Read current page",
+  submit_manifest: "Submit changes",
+  open_patient_chart: "Open patient chart",
+}
+
+function toolDisplayName(name) {
+  return TOOL_DISPLAY_NAMES[name] || name
+}
+
 const ACTION_LABELS = {
   create: "Add",
   update: "Update",
@@ -659,7 +671,7 @@ class SidebarApp {
       const meta = document.createElement("div")
       meta.className = "meta"
       const toolText = (metadata.tools || [])
-        .map((tool) => `${tool.name} × ${tool.count}`)
+        .map((tool) => `${toolDisplayName(tool.name)} × ${tool.count}`)
         .join(", ")
       const latencyText = `${(metadata.latencyMs / 1000).toFixed(1)}s`
       meta.textContent = toolText ? `${latencyText} · ${toolText}` : latencyText
@@ -674,7 +686,7 @@ class SidebarApp {
         const list = document.createElement("ul")
         for (const tool of metadata.tools) {
           const li = document.createElement("li")
-          li.textContent = `✓ ${tool.name} called ${tool.count} time(s)`
+          li.textContent = `✓ ${toolDisplayName(tool.name)} called ${tool.count} time(s)`
           list.appendChild(li)
         }
         details.appendChild(list)
