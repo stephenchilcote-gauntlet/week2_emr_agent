@@ -25,6 +25,7 @@ class ChatResponse(BaseModel):
     phase: str
     error: str | None = None
     tool_calls_summary: list[dict[str, Any]] | None = None
+    openemr_pid: str | None = None
 
 
 class ApprovalRequest(BaseModel):

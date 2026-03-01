@@ -263,6 +263,7 @@ async def chat(
         manifest=session.manifest.model_dump() if session.manifest else None,
         phase=session.phase,
         tool_calls_summary=_summarize_tool_calls(session),
+        openemr_pid=session.openemr_pid,
     )
 
 

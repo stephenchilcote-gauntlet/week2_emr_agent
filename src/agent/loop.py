@@ -17,6 +17,7 @@ from .models import (
     ChangeManifest,
     ManifestAction,
     ManifestItem,
+    PageContext,
     ToolCall,
     ToolResult,
 )
@@ -367,6 +368,56 @@ class AgentLoop:
                             ),
                         }
                     ),
+                )
+
+            elif tool_call.name == "open_patient_chart":
+                patient_uuid = tool_call.arguments["patient_uuid"]
+                result = await self.openemr_client.fhir_read(
+                    f"Patient/{patient_uuid}"
+                )
+                if "error" in result:
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        content=json.dumps({"error": f"Patient not found: {result.get('error')}"}),
+                        is_error=True,
+                    )
+                openemr_pid = None
+                for ident in result.get("identifier", []):
+                    if ident.get("type", {}).get("coding", [{}])[0].get("code") == "PT":
+                        openemr_pid = ident.get("value")
+                        break
+                if not openemr_pid:
+                    identifiers = result.get("identifier", [])
+                    if identifiers:
+                        openemr_pid = identifiers[0].get("value")
+                if not openemr_pid:
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        content=json.dumps({"error": "Could not resolve OpenEMR PID from FHIR Patient resource"}),
+                        is_error=True,
+                    )
+                session.fhir_patient_id = patient_uuid
+                if session.page_context is None:
+                    session.page_context = PageContext(patient_id=openemr_pid)
+                else:
+                    session.page_context.patient_id = openemr_pid
+                session.openemr_pid = openemr_pid
+                patient_name = ""
+                names = result.get("name", [])
+                if names:
+                    name = names[0]
+                    given = " ".join(name.get("given", []))
+                    family = name.get("family", "")
+                    patient_name = f"{given} {family}".strip()
+                return ToolResult(
+                    tool_call_id=tool_call.id,
+                    content=json.dumps({
+                        "status": "patient_chart_opened",
+                        "patient_uuid": patient_uuid,
+                        "openemr_pid": openemr_pid,
+                        "patient_name": patient_name,
+                        "message": f"Opened chart for {patient_name} (PID {openemr_pid}). The patient dashboard is now active.",
+                    }),
                 )
 
             else:

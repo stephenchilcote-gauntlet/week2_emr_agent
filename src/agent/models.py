@@ -83,4 +83,5 @@ class AgentSession(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     openemr_user_id: str | None = None
     fhir_patient_id: str | None = None
+    openemr_pid: str | None = None
 
