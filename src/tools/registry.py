@@ -145,6 +145,20 @@ async def tool_get_page_context(registry: ToolRegistry) -> dict:
     return registry._page_context.model_dump()
 
 
+async def tool_send_developer_feedback(category: str, message: str) -> dict:
+    """Record developer feedback (bug report or feature request).
+
+    Note: when called via the registry (outside the agent loop), feedback
+    is returned but not persisted.  The agent loop handler writes to the
+    audit store directly.
+    """
+    return {
+        "status": "feedback_submitted",
+        "category": category,
+        "message": "Feedback has been recorded for the development team.",
+    }
+
+
 async def tool_submit_manifest(registry: ToolRegistry, manifest: dict) -> dict:
     """Store a change manifest for human review before execution."""
     try:
@@ -211,6 +225,27 @@ def register_default_tools(registry: ToolRegistry) -> None:
         func=lambda: tool_get_page_context(registry),
         description="Get the current UI page context (active patient, encounter, etc.).",
         input_schema={"type": "object", "properties": {}},
+    )
+
+    registry.register(
+        name="send_developer_feedback",
+        func=lambda category, message: tool_send_developer_feedback(category, message),
+        description="Send a bug report or feature request to the development team.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": ["bug", "feature_request", "usability"],
+                    "description": "The type of feedback.",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Detailed description of the bug or feature request.",
+                },
+            },
+            "required": ["category", "message"],
+        },
     )
 
     registry.register(

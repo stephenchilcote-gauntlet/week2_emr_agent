@@ -13,6 +13,7 @@ from src.tools.registry import (
     ToolRegistry,
     register_default_tools,
     tool_get_page_context,
+    tool_send_developer_feedback,
     tool_submit_manifest,
 )
 
@@ -152,6 +153,24 @@ class TestToolSubmitManifest:
 
 
 # ------------------------------------------------------------------
+# tool_send_developer_feedback
+# ------------------------------------------------------------------
+
+class TestToolSendDeveloperFeedback:
+    @pytest.mark.asyncio
+    async def test_returns_confirmation(self):
+        result = await tool_send_developer_feedback("bug", "Search returns 500 on empty query")
+        assert result["status"] == "feedback_submitted"
+        assert result["category"] == "bug"
+
+    @pytest.mark.asyncio
+    async def test_feature_request(self):
+        result = await tool_send_developer_feedback("feature_request", "Add dark mode")
+        assert result["status"] == "feedback_submitted"
+        assert result["category"] == "feature_request"
+
+
+# ------------------------------------------------------------------
 # Default tools wiring
 # ------------------------------------------------------------------
 
@@ -166,6 +185,7 @@ class TestDefaultTools:
         assert "fhir_read" in names
         assert "openemr_api" in names
         assert "get_page_context" in names
+        assert "send_developer_feedback" in names
         assert "submit_manifest" in names
 
     def test_each_definition_has_required_fields(self):

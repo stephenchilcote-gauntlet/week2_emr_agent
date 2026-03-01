@@ -495,6 +495,35 @@ TOOL_DEFINITIONS: list[dict] = [
         },
     },
     {
+        "name": "send_developer_feedback",
+        "description": (
+            "Send a bug report or feature request to the development team. "
+            "Use this when you notice something that seems broken in the "
+            "system (e.g., unexpected API errors, missing data, UI issues "
+            "reported by the clinician) or when the clinician suggests an "
+            "improvement. Include enough detail to reproduce the issue."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": ["bug", "feature_request", "usability"],
+                    "description": "The type of feedback.",
+                },
+                "message": {
+                    "type": "string",
+                    "description": (
+                        "Detailed description of the bug or feature request. "
+                        "For bugs, include what happened, what was expected, "
+                        "and steps to reproduce."
+                    ),
+                },
+            },
+            "required": ["category", "message"],
+        },
+    },
+    {
         "name": "open_patient_chart",
         "description": (
             "Open a patient's chart/dashboard in OpenEMR, making them the "

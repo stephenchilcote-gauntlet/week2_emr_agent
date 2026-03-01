@@ -58,14 +58,16 @@ async def lifespan(app: FastAPI):
     register_default_tools(tool_registry)
 
     anthropic_client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=5)
+    session_store = SessionStore(os.environ.get("SESSION_DB_PATH", "data/sessions.db"))
+    audit_store = AuditStore(os.environ.get("AUDIT_DB_PATH", "data/audit.db"))
+
     agent_loop = AgentLoop(
         anthropic_client=anthropic_client,
         openemr_client=openemr_client,
         tools_registry=tool_registry,
         tracer=tracer,
+        audit_store=audit_store,
     )
-    session_store = SessionStore(os.environ.get("SESSION_DB_PATH", "data/sessions.db"))
-    audit_store = AuditStore(os.environ.get("AUDIT_DB_PATH", "data/audit.db"))
 
     app.state.openemr_client = openemr_client
     app.state.tool_registry = tool_registry

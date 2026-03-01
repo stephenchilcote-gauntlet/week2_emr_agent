@@ -308,6 +308,7 @@ _AUDIT_ICONS = {
     "chat_received": "💬",
     "manifest_reviewed": "📋",
     "manifest_executed": "🚀",
+    "developer_feedback": "📣",
 }
 
 

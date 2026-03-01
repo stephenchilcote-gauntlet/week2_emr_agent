@@ -8,6 +8,7 @@ from typing import Any, Protocol
 import anthropic
 from opentelemetry import trace as otel_trace
 
+from ..observability.audit import AuditEvent, AuditStore
 from ..observability.tracing import trace_llm_call, trace_tool_call
 from .dsl import parse_manifest_dsl
 from .labels import is_word_id, replace_uuids_with_words, resolve_identifier, resolve_reference
@@ -75,11 +76,13 @@ class AgentLoop:
         openemr_client: OpenEMRClient,
         tools_registry: ToolsRegistry | None = None,
         tracer: Tracer | None = None,
+        audit_store: AuditStore | None = None,
     ) -> None:
         self.anthropic_client = anthropic_client
         self.openemr_client = openemr_client
         self.tools_registry = tools_registry
         self.tracer = tracer
+        self.audit_store = audit_store
         if tracer:
             self._call_llm = trace_llm_call(tracer)(self._call_llm)
             self._execute_tool = trace_tool_call(tracer)(self._execute_tool)
@@ -423,6 +426,29 @@ class AgentLoop:
                         "openemr_pid": openemr_pid,
                         "patient_name": patient_name,
                         "message": f"Opened chart for {patient_name} (PID {openemr_pid}). The patient dashboard is now active.",
+                    }),
+                )
+
+            elif tool_call.name == "send_developer_feedback":
+                category = tool_call.arguments.get("category", "bug")
+                message = tool_call.arguments.get("message", "")
+                if self.audit_store:
+                    self.audit_store.record(AuditEvent(
+                        session_id=session.id,
+                        user_id=session.openemr_user_id or "unknown",
+                        event_type="developer_feedback",
+                        summary=f"[{category}] {message[:120]}",
+                        details={
+                            "category": category,
+                            "message": message,
+                        },
+                    ))
+                return ToolResult(
+                    tool_call_id=tool_call.id,
+                    content=json.dumps({
+                        "status": "feedback_submitted",
+                        "category": category,
+                        "message": "Feedback has been recorded for the development team.",
                     }),
                 )
 
