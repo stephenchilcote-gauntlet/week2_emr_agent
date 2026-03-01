@@ -305,7 +305,6 @@ def _format_manifest(manifest: dict | None) -> str:
 # ---------------------------------------------------------------------------
 
 _AUDIT_ICONS = {
-    "message_feedback": "⭐",
     "chat_received": "💬",
     "manifest_reviewed": "📋",
     "manifest_executed": "🚀",
@@ -320,8 +319,12 @@ def _format_audit_events(events: list[dict]) -> str:
         ts = ev.get("timestamp", "")
         if "T" in ts:
             ts = ts.split("T")[1][:8]  # HH:MM:SS
-        icon = _AUDIT_ICONS.get(ev.get("event_type", ""), "📝")
-        etype = ev.get("event_type", "")
+        etype_key = ev.get("event_type", "")
+        if etype_key == "message_feedback":
+            icon = "👍" if ev.get("details", {}).get("rating") == "up" else "👎"
+        else:
+            icon = _AUDIT_ICONS.get(etype_key, "📝")
+        etype = etype_key
         summary = ev.get("summary", "")
         details = ev.get("details", {})
         detail_str = ", ".join(f"{k}={v}" for k, v in details.items()) if details else ""
