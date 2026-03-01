@@ -32,7 +32,7 @@ body {
 /* ── Sidebar shell ── */
 
 .sidebar {
-  width: 380px;
+  width: 475px;
   height: 100vh;
   background: var(--surface);
   border-left: 1px solid var(--border);
@@ -962,10 +962,24 @@ body {
   font-weight: 500;
 }
 
-.verification-summary.all-passed {
+.verification-summary.all-passed,
+.verification-summary.manifest-completed {
   background: #f0fdf4;
   border-left-color: var(--ok);
   color: var(--ok);
+}
+
+.verification-summary.manifest-rejected,
+.verification-summary.manifest-failed {
+  background: #fef2f2;
+  border-left-color: var(--error);
+  color: var(--error);
+}
+
+.verification-summary.manifest-executing {
+  background: #fffbeb;
+  border-left-color: #d97706;
+  color: #d97706;
 }
 
 /* ── Audit trail panel ── */

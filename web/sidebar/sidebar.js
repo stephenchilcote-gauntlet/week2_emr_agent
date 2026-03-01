@@ -777,8 +777,26 @@ class SidebarApp {
       this.measureMaxCardHeight(manifest.items)
     }
 
-    this.renderTourCard(manifest.items[idx])
+    const terminal = ["completed", "failed", "rejected", "executing"]
+    const isTerminal = terminal.includes(manifest.status)
+
+    this.renderTourCard(manifest.items[idx], isTerminal)
     this.requestAllOverlays(manifest.items, idx)
+
+    this.el.applyAll.disabled = isTerminal
+    this.el.rejectAll.disabled = isTerminal
+
+    if (isTerminal) {
+      const labels = { completed: "✓ Applied", failed: "✗ Failed", rejected: "✗ Rejected", executing: "⏳ Executing" }
+      this.el.reviewSummary.innerHTML = ""
+      const badge = document.createElement("div")
+      badge.className = `verification-summary manifest-${manifest.status}`
+      badge.textContent = labels[manifest.status] || manifest.status
+      this.el.reviewSummary.appendChild(badge)
+      this.el.executeButton.disabled = true
+      this.el.executeButton.textContent = labels[manifest.status] || manifest.status
+      return
+    }
 
     let approved = 0
     let rejected = 0
@@ -811,7 +829,7 @@ class SidebarApp {
     }
   }
 
-  renderTourCard(item) {
+  renderTourCard(item, isTerminal = false) {
     this.el.reviewCards.innerHTML = ""
     const card = document.createElement("article")
     card.className = "review-card"
@@ -913,17 +931,19 @@ class SidebarApp {
       card.appendChild(srcDiv)
     }
 
-    const actions = document.createElement("div")
-    actions.className = "review-card-actions"
-    const applyBtn = this.makeReviewButton("Apply", "btn-sm btn-accent", () => this.updateReviewItem(item.id, "approved", item.proposed_value))
-    const rejectBtn = this.makeReviewButton("Reject", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "rejected", item.proposed_value))
-    const undoBtn = this.makeReviewButton("Undo", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "pending", item.proposed_value))
-    if (item.status === "approved") applyBtn.classList.add("active-status")
-    if (item.status === "rejected") rejectBtn.classList.add("active-status")
-    actions.appendChild(applyBtn)
-    actions.appendChild(rejectBtn)
-    actions.appendChild(undoBtn)
-    card.appendChild(actions)
+    if (!isTerminal) {
+      const actions = document.createElement("div")
+      actions.className = "review-card-actions"
+      const applyBtn = this.makeReviewButton("Apply", "btn-sm btn-accent", () => this.updateReviewItem(item.id, "approved", item.proposed_value))
+      const rejectBtn = this.makeReviewButton("Reject", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "rejected", item.proposed_value))
+      const undoBtn = this.makeReviewButton("Undo", "btn-sm btn-muted", () => this.updateReviewItem(item.id, "pending", item.proposed_value))
+      if (item.status === "approved") applyBtn.classList.add("active-status")
+      if (item.status === "rejected") rejectBtn.classList.add("active-status")
+      actions.appendChild(applyBtn)
+      actions.appendChild(rejectBtn)
+      actions.appendChild(undoBtn)
+      card.appendChild(actions)
+    }
 
     if (this.state.verificationResults && this.state.verificationResults.length > 0) {
       const itemResults = this.state.verificationResults.filter((r) => r.item_id === item.id)
