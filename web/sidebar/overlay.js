@@ -105,27 +105,39 @@
     return container
   }
 
-  function createActionButtons(frameDoc, item, isFocused) {
-    var grid = frameDoc.createElement("div")
-    grid.className = "agent-overlay-actions"
-    grid.style.cssText =
-      "display:grid;grid-template-columns:auto auto;gap:2px;" +
+  function allItemsReviewed(items) {
+    if (!items || !items.length) return false
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].status !== "approved" && items[i].status !== "rejected") return false
+    }
+    return true
+  }
+
+  function createActionButtons(frameDoc, item, isFocused, allItems) {
+    var container = frameDoc.createElement("div")
+    container.className = "agent-overlay-actions"
+    container.style.cssText =
+      "display:flex;flex-direction:column;align-items:flex-end;" +
       "margin-left:auto;flex-shrink:0;padding:2px;width:fit-content;"
+
+    var grid = frameDoc.createElement("div")
+    grid.style.cssText =
+      "display:grid;grid-template-columns:auto auto;gap:2px;"
 
     var btnStyle =
       "border:1px solid #d1d5db;border-radius:3px;cursor:pointer;" +
-      "font-size:11px;padding:1px 6px;background:#fff;color:#374151;" +
+      "padding:1px 6px;background:#fff;color:#374151;" +
       "line-height:1.4;"
 
     var buttons = [
-      { label: "\u2713", cls: "overlay-btn-accept", msg: { type: "overlay:accept", itemId: item.id } },
-      { label: "\u2717", cls: "overlay-btn-reject", msg: { type: "overlay:reject", itemId: item.id } },
+      { label: "\u2705", cls: "overlay-btn-accept", msg: { type: "overlay:accept", itemId: item.id }, style: btnStyle + "font-size:16px;" },
+      { label: "\uD83D\uDEAB", cls: "overlay-btn-reject", msg: { type: "overlay:reject", itemId: item.id }, style: btnStyle + "font-size:16px;" },
     ]
 
     if (isFocused) {
       buttons.push(
-        { label: "\u2039", cls: "overlay-btn-prev",   msg: { type: "overlay:navigate", delta: -1 } },
-        { label: "\u203A", cls: "overlay-btn-next",   msg: { type: "overlay:navigate", delta: 1 } }
+        { label: "\u2039", cls: "overlay-btn-prev",   msg: { type: "overlay:navigate", delta: -1 }, style: btnStyle + "font-size:18px;font-weight:bold;" },
+        { label: "\u203A", cls: "overlay-btn-next",   msg: { type: "overlay:navigate", delta: 1 }, style: btnStyle + "font-size:18px;font-weight:bold;" }
       )
     }
 
@@ -135,7 +147,7 @@
       btn.className = b.cls
       btn.textContent = b.label
       btn.dataset.itemId = item.id
-      btn.style.cssText = btnStyle
+      btn.style.cssText = b.style
       ;(function (message) {
         btn.addEventListener("click", function (e) {
           e.stopPropagation()
@@ -145,7 +157,28 @@
       grid.appendChild(btn)
     }
 
-    return grid
+    container.appendChild(grid)
+
+    if (isFocused && allItems && allItemsReviewed(allItems)) {
+      var hasApproved = false
+      for (var j = 0; j < allItems.length; j++) {
+        if (allItems[j].status === "approved") { hasApproved = true; break }
+      }
+      var execBtn = frameDoc.createElement("button")
+      execBtn.className = "overlay-btn-execute"
+      execBtn.textContent = hasApproved ? "Execute Changes" : "Discard All"
+      execBtn.style.cssText =
+        "border:none;border-radius:4px;cursor:pointer;" +
+        "font-size:13px;font-weight:600;padding:4px 12px;margin-top:4px;" +
+        "background:#0f766e;color:#fff;line-height:1.4;white-space:nowrap;"
+      execBtn.addEventListener("click", function (e) {
+        e.stopPropagation()
+        window.postMessage({ type: "overlay:execute" }, "*")
+      })
+      container.appendChild(execBtn)
+    }
+
+    return container
   }
 
   function createBadge(doc, text, color) {
@@ -355,7 +388,7 @@
     if (confBadge) fill.appendChild(confBadge)
 
     summary.appendChild(fill)
-    summary.appendChild(createActionButtons(frameDoc, item, isFocused))
+    summary.appendChild(createActionButtons(frameDoc, item, isFocused, currentManifestItems))
     ghost.appendChild(summary)
 
     listGroup.insertBefore(ghost, listGroup.firstChild)
@@ -424,7 +457,7 @@
     }
 
     wrapper.appendChild(contentDiv)
-    wrapper.appendChild(createActionButtons(frameDoc, item, isFocused))
+    wrapper.appendChild(createActionButtons(frameDoc, item, isFocused, currentManifestItems))
     row.appendChild(wrapper)
     injectedElements.push({ element: wrapper, frameDoc: frameDoc, unwrap: true })
 
@@ -488,7 +521,7 @@
     }
 
     wrapper.appendChild(contentDiv)
-    wrapper.appendChild(createActionButtons(frameDoc, item, isFocused))
+    wrapper.appendChild(createActionButtons(frameDoc, item, isFocused, currentManifestItems))
     row.appendChild(wrapper)
     injectedElements.push({ element: wrapper, frameDoc: frameDoc, unwrap: true })
 
@@ -538,7 +571,7 @@
 
     headerFill.appendChild(h5)
     header.appendChild(headerFill)
-    header.appendChild(createActionButtons(frameDoc, item, isFocused))
+    header.appendChild(createActionButtons(frameDoc, item, isFocused, currentManifestItems))
     ghost.appendChild(header)
 
     var detail = frameDoc.createElement("div")
@@ -623,7 +656,7 @@
     var confBadge = createConfidenceBadge(doc, item.confidence, item.status)
     if (confBadge) titleEl.appendChild(confBadge)
     headerRow.appendChild(titleEl)
-    headerRow.appendChild(createActionButtons(doc, item, isFocused))
+    headerRow.appendChild(createActionButtons(doc, item, isFocused, currentManifestItems))
     wrapper.appendChild(headerRow)
 
     var fields = [
@@ -805,7 +838,7 @@
     if (confBadge) fill.appendChild(confBadge)
 
     contentWrapper.appendChild(fill)
-    contentWrapper.appendChild(createActionButtons(frameDoc, item, isFocused))
+    contentWrapper.appendChild(createActionButtons(frameDoc, item, isFocused, currentManifestItems))
     reasonTd.appendChild(contentWrapper)
     ghost.appendChild(reasonTd)
 
@@ -870,7 +903,7 @@
     }
 
     summary.appendChild(fill)
-    summary.appendChild(createActionButtons(frameDoc, item, isFocused))
+    summary.appendChild(createActionButtons(frameDoc, item, isFocused, currentManifestItems))
     ghost.appendChild(summary)
 
     container.insertBefore(ghost, container.firstChild)
@@ -1202,6 +1235,27 @@
     }
   }
 
+  function handleRefresh(items) {
+    var topWin = window.top || window
+    var tabsToRefresh = {}
+    items.forEach(function (item) {
+      var mapping = RESOURCE_PAGE_MAP[item.resource_type]
+      if (mapping && mapping.tab) {
+        tabsToRefresh[mapping.tab] = true
+      }
+    })
+    Object.keys(tabsToRefresh).forEach(function (tabName) {
+      var frameEl = topWin.document.querySelector("iframe[name='" + tabName + "']")
+      if (frameEl && frameEl.contentWindow) {
+        try {
+          frameEl.contentWindow.location.reload()
+        } catch (_e) {
+          // cross-origin guard: silently skip
+        }
+      }
+    })
+  }
+
   window.addEventListener("message", function (event) {
     if (!event.data || typeof event.data.type !== "string") return
     if (!event.data.type.startsWith("overlay:")) return
@@ -1250,7 +1304,12 @@
       clearAllOverlays()
     }
 
-    if (event.data.type === "overlay:accept" ||
+    if (event.data.type === "overlay:refresh") {
+      handleRefresh(event.data.items || [])
+    }
+
+    if (event.data.type === "overlay:execute" ||
+        event.data.type === "overlay:accept" ||
         event.data.type === "overlay:reject" ||
         event.data.type === "overlay:navigate") {
       var iframes = document.querySelectorAll("iframe")

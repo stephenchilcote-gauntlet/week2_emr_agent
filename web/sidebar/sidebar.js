@@ -296,6 +296,9 @@ class SidebarApp {
       if (event.data && event.data.type === "overlay:navigate") {
         this.tourNavigate(event.data.delta)
       }
+      if (event.data && event.data.type === "overlay:execute") {
+        this.executeManifest()
+      }
     })
 
     this.el.chatArea.addEventListener("scroll", () => {
@@ -1101,6 +1104,13 @@ class SidebarApp {
       const statusMsg = formatExecutionContent(`Execution complete. ${completed} succeeded, ${failed} failed, 0 skipped.`) || "Changes processed."
       this.renderSystemNotice(statusMsg)
       this.state.pendingManifest = null
+      // Reload affected OpenEMR tab(s) so clinician sees updated data
+      if (completed > 0) {
+        this.postOverlayMessage({
+          type: "overlay:refresh",
+          items: items.filter((i) => i.status === "completed"),
+        })
+      }
       this.renderReviewPanel()
       this.setStatus("ready")
     } catch (error) {
