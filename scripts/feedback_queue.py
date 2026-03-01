@@ -4,6 +4,11 @@ Queries audit events of type 'developer_feedback' (filed by the agent via
 the send_developer_feedback tool) and 'message_feedback' (thumbs up/down
 from clinicians).
 
+⚠ PHI WARNING: Feedback messages may contain patient data copied from the
+clinical context.  This is safe while output stays on the same server as
+the audit/session DBs.  Do NOT pipe output to external bug trackers, Slack,
+or email without PHI scrubbing first.
+
 Usage:
     uv run python scripts/feedback_queue.py                    # all feedback
     uv run python scripts/feedback_queue.py --category bug     # only bugs
