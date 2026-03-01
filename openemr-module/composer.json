@@ -1,0 +1,20 @@
+{
+    "name": "openemr/oe-module-clinical-assistant",
+    "description": "Clinical assistant sidebar integration for OpenEMR",
+    "type": "openemr-module",
+    "license": "GPL-3.0-or-later",
+    "require": {
+        "php": ">=8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "OpenEMR\\Modules\\ClinicalAssistant\\": "src/"
+        }
+    },
+    "extra": {
+        "openemr": {
+            "type": "custom-module",
+            "directory": "oe-module-clinical-assistant"
+        }
+    }
+}

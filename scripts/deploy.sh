@@ -125,13 +125,16 @@ if [ "$DEPLOY_ALL" = true ]; then
   SERVICES=""  # all services
   echo "=== Full sync (including openemr/) to $SERVER:$REMOTE_DIR ==="
 else
-  # Agent-only: skip the 2.1 GB openemr/ directory entirely
-  RSYNC_EXCLUDES+=(--exclude 'openemr/')
+  # Agent-only: skip the 2.1 GB openemr/ and openemr-module/ directories entirely
+  RSYNC_EXCLUDES+=(--exclude 'openemr/' --exclude 'openemr-module/')
   SERVICES="agent"
   echo "=== Agent-only sync (skipping openemr/) to $SERVER:$REMOTE_DIR ==="
 fi
 
-rsync -avz --delete \
+# -L / --copy-links: dereference symlinks instead of copying the link itself.
+# Without this, a dev-machine symlink (e.g. assets/ → web/sidebar/) is sent to
+# the server as a dangling symlink, silently breaking the Docker build.
+rsync -avzL --delete \
   "${RSYNC_EXCLUDES[@]}" \
   ./ "$SERVER:$REMOTE_DIR/"
 
@@ -140,28 +143,54 @@ scp .env.prod "$SERVER:$REMOTE_DIR/.env"
 
 if [ -n "$SERVICES" ]; then
   echo "=== Building and restarting: $SERVICES ==="
-  ssh -o StrictHostKeyChecking=no "$SERVER" "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml --env-file .env up -d --build $SERVICES"
+  # --no-deps: only manage the agent container; never touch openemr/mysql.
+  # Without this, docker buildx bake rebuilds ALL images (even from cache), which
+  # produces a new attestation manifest → new image hash → compose recreates openemr
+  # → 2-minute boot → every verification check fails.
+  ssh -o StrictHostKeyChecking=no "$SERVER" "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml --env-file .env up -d --build --no-deps $SERVICES"
+
+  echo "=== Waiting for agent to become healthy ==="
+  AGENT_UP=false
+  for _i in $(seq 1 30); do
+    CONNECTED=$(ssh -o StrictHostKeyChecking=no "$SERVER" \
+      "curl -sf http://localhost:8000/api/health 2>/dev/null | python3 -c 'import sys,json; d=json.loads(sys.stdin.read()); print(\"yes\" if d.get(\"openemr_connected\") else \"no\")' 2>/dev/null || echo no") || true
+    if [ "$CONNECTED" = "yes" ]; then
+      echo "Agent is up and connected to OpenEMR."
+      AGENT_UP=true
+      break
+    fi
+    printf "  not ready yet (%d/30)…\n" "$_i"
+    sleep 2
+  done
+  [ "$AGENT_UP" = "true" ] || echo "WARNING: agent did not report openemr_connected=true within 60 s"
 else
   echo "=== Building and starting all services ==="
   ssh -o StrictHostKeyChecking=no "$SERVER" "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml --env-file .env up -d --build"
 
-  echo "=== Waiting for OpenEMR to be healthy ==="
-  MAX_ATTEMPTS=60
+  echo "=== Waiting for OpenEMR OAuth endpoint to be ready ==="
+  # Polling the OpenID config endpoint is more reliable than TCP port 80:
+  # Apache accepts TCP connections before PHP/OpenEMR finishes initializing,
+  # so a TCP check can pass 60-120 s before OAuth actually works.
+  MAX_ATTEMPTS=120
   ATTEMPT=0
   while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-    if ssh -o StrictHostKeyChecking=no "$SERVER" "timeout 2 bash -c 'cat < /dev/null > /dev/tcp/localhost/80' 2>/dev/null"; then
-      echo "OpenEMR is up on port 80."
+    HTTP=$(ssh -o StrictHostKeyChecking=no "$SERVER" \
+      "curl -sk -o /dev/null -w '%{http_code}' http://localhost/oauth2/default/.well-known/openid-configuration" \
+      2>/dev/null || echo "000")
+    if [ "$HTTP" = "200" ]; then
+      echo "OpenEMR OAuth endpoint is ready."
       break
     fi
     ATTEMPT=$((ATTEMPT + 1))
     if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-      echo "Waiting for OpenEMR to accept connections... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
-      sleep 2
+      printf "  Waiting for OpenEMR OAuth... HTTP %s (attempt %d/%d)\n" "$HTTP" "$ATTEMPT" "$MAX_ATTEMPTS"
+      sleep 5
     fi
   done
 
   if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
-    echo "ERROR: OpenEMR did not come up after 2 minutes. Check logs with: ssh $SERVER 'cd $REMOTE_DIR && docker compose logs'"
+    echo "ERROR: OpenEMR OAuth endpoint did not become ready after 10 minutes."
+    echo "Check logs with: ssh $SERVER 'cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml logs openemr --tail 50'"
     exit 1
   fi
 fi

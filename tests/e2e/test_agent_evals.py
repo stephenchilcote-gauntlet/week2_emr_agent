@@ -117,6 +117,12 @@ def _send_eval_message(
                     for name, count in sorted(all_tool_counts.items())
                 ]
 
+        # Cleanup: delete the session so eval runs don't pollute history
+        page.request.delete(
+            f"{agent_url}/api/sessions/{session_id}",
+            headers=api_headers,
+        )
+
     return {
         "response_text": response_text,
         "manifest": manifest,

@@ -164,6 +164,17 @@ class EvalRunner:
                     details["expected_tools"] = expected["tool_calls"]
                     details["actual_tools"] = actual_tools
 
+                # Cleanup: delete the session so eval runs don't pollute history
+                session_id = data.get("session_id")
+                if session_id:
+                    try:
+                        await client.delete(
+                            f"{self.agent_url}/api/sessions/{session_id}",
+                            headers={"openemr_user_id": self.user_id},
+                        )
+                    except Exception:
+                        pass
+
         except Exception as e:
             error = str(e)
             checks = {}

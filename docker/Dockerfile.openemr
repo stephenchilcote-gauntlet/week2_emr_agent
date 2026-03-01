@@ -1,14 +1,19 @@
 FROM openemr/openemr:flex
 
-# Copy pre-built OpenEMR source (includes vendor/, node_modules/, built assets)
+# Copy pre-built OpenEMR source (stock, unmodified — no custom files in here)
 COPY --chown=apache:apache ./openemr/ /var/www/localhost/htdocs/openemr/
 
-# Copy canonical sidebar assets from web/sidebar/ into the OpenEMR module.
-# web/sidebar/ is the single source of truth; the module directory only keeps
-# OpenEMR-specific files (embed.js, proxy.php, sidebar_frame.php).
-COPY --chown=apache:apache ./web/sidebar/sidebar.js /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/sidebar.js
+# Copy custom module (lives in openemr-module/ so the openemr/ tree stays stock)
+COPY --chown=apache:apache ./openemr-module/ /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/
+
+# web/sidebar/ is the single source of truth for all sidebar assets.
+# These explicit COPYs run last and unconditionally overwrite anything that
+# landed in assets/ via the two COPYs above.
+COPY --chown=apache:apache ./web/sidebar/embed.js    /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/embed.js
+COPY --chown=apache:apache ./web/sidebar/index.html  /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/index.html
+COPY --chown=apache:apache ./web/sidebar/sidebar.js  /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/sidebar.js
 COPY --chown=apache:apache ./web/sidebar/sidebar.css /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/sidebar.css
-COPY --chown=apache:apache ./web/sidebar/overlay.js /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/overlay.js
+COPY --chown=apache:apache ./web/sidebar/overlay.js  /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/overlay.js
 
 # Skip the git clone at startup. Create empty /openemr so the
 # EASY_DEV_MODE_NEW rsync is a harmless no-op (--ignore-existing).
