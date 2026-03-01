@@ -792,8 +792,13 @@ class AgentLoop:
         - Legacy list of dicts in 'items' (old JSON format, for backwards compat)
         """
         raw_items = arguments.get("items", "")
+        patient_id = (
+            session.fhir_patient_id
+            or (session.page_context.patient_id if session.page_context else None)
+            or arguments.get("patient_id", "")
+        )
         resolved_patient_id = self._resolve_manifest_identifier(
-            arguments["patient_id"],
+            patient_id,
             session,
         )
 
