@@ -53,9 +53,10 @@ def main() -> None:
     args = parser.parse_args()
 
     session = _load_session_from_api(args.api_url, args.session_id, args.user_id)
+    audit_events = _load_audit_from_api(args.api_url, args.session_id, args.user_id)
     traces = _fetch_jaeger_traces(args.jaeger_url, args.session_id)
 
-    if session is None and not traces:
+    if session is None and not traces and not audit_events:
         print(f"No data found for session {args.session_id}", file=sys.stderr)
         sys.exit(1)
 
@@ -75,6 +76,9 @@ def main() -> None:
         parts.append(
             "> ⚠️ Session not found in database. Showing Jaeger traces only.\n"
         )
+
+    if audit_events:
+        parts.append(_format_audit_events(audit_events))
 
     if traces:
         parts.append(_format_jaeger_traces(traces))
@@ -101,6 +105,20 @@ def _load_session_from_api(api_url: str, session_id: str, user_id: str) -> dict 
     except httpx.ConnectError as exc:
         print(f"⚠ Cannot connect to API at {api_url}: {exc}", file=sys.stderr)
         return None
+
+
+def _load_audit_from_api(api_url: str, session_id: str, user_id: str) -> list[dict]:
+    url = f"{api_url.rstrip('/')}/api/sessions/{session_id}/audit"
+    try:
+        resp = httpx.get(url, headers={"openemr_user_id": user_id}, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        print(f"⚠ Audit API error {exc.response.status_code}: {exc.response.text}", file=sys.stderr)
+        return []
+    except httpx.ConnectError as exc:
+        print(f"⚠ Cannot connect to API for audit at {api_url}: {exc}", file=sys.stderr)
+        return []
 
 
 def _load_session(db_path: str, session_id: str) -> dict | None:
@@ -278,6 +296,38 @@ def _format_manifest(manifest: dict | None) -> str:
     else:
         lines.append("No manifest items.")
 
+    lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Markdown formatting — audit events
+# ---------------------------------------------------------------------------
+
+_AUDIT_ICONS = {
+    "message_feedback": "⭐",
+    "chat_received": "💬",
+    "manifest_reviewed": "📋",
+    "manifest_executed": "🚀",
+}
+
+
+def _format_audit_events(events: list[dict]) -> str:
+    lines = [f"\n## Audit Trail\n\nFound **{len(events)}** event(s).\n"]
+    lines.append("| # | Time | Type | Summary | Details |")
+    lines.append("|---|------|------|---------|---------|")
+    for i, ev in enumerate(events, 1):
+        ts = ev.get("timestamp", "")
+        if "T" in ts:
+            ts = ts.split("T")[1][:8]  # HH:MM:SS
+        icon = _AUDIT_ICONS.get(ev.get("event_type", ""), "📝")
+        etype = ev.get("event_type", "")
+        summary = ev.get("summary", "")
+        details = ev.get("details", {})
+        detail_str = ", ".join(f"{k}={v}" for k, v in details.items()) if details else ""
+        if len(detail_str) > 80:
+            detail_str = detail_str[:80] + "…"
+        lines.append(f"| {i} | {ts} | {icon} {etype} | {summary} | {detail_str} |")
     lines.append("")
     return "\n".join(lines)
 
