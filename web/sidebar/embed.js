@@ -88,6 +88,16 @@
         function initBridge() {
             var encSub = null;
 
+            // Cache patient identity from the patient subscriber so that
+            // tab-visibility-triggered sendContext() calls never read a
+            // transient null from the knockout observable during tab switches.
+            var cachedPid = null;
+            var cachedPname = null;
+
+            var initialPatient = app_view_model.application_data.patient();
+            cachedPid = initialPatient ? String(initialPatient.pid()) : null;
+            cachedPname = initialPatient ? initialPatient.pname() : null;
+
             function getActivePageUrl() {
                 try {
                     var tabs = app_view_model.application_data.tabs.tabsList();
@@ -107,8 +117,8 @@
                 var patient = app_view_model.application_data.patient();
                 frame.contentWindow.postMessage({
                     type: 'clinical-assistant-context',
-                    pid: patient ? String(patient.pid()) : null,
-                    pname: patient ? patient.pname() : null,
+                    pid: cachedPid,
+                    pname: cachedPname,
                     encounter_id: patient && patient.selectedEncounterID()
                         ? String(patient.selectedEncounterID()) : null,
                     page_url: getActivePageUrl()
@@ -142,6 +152,8 @@
             }
 
             app_view_model.application_data.patient.subscribe(function (newPatient) {
+                cachedPid = newPatient ? String(newPatient.pid()) : null;
+                cachedPname = newPatient ? newPatient.pname() : null;
                 watchPatient(newPatient);
                 sendContext();
             });
