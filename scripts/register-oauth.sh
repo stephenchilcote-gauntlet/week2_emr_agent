@@ -13,36 +13,27 @@
 #
 # Usage:
 #   ./scripts/register-oauth.sh <server-ip>              # remote (via SSH)
-#   ./scripts/register-oauth.sh local                    # local docker compose
 set -euo pipefail
 
 ADMIN_PASS="${OPENEMR_PASS:-pass}"
 MYSQL_PASS="${MYSQL_PASSWORD:-openemr}"
 
 if [ $# -lt 1 ]; then
-  echo "Usage: $0 <server-ip|local>"
+  echo "Usage: $0 <server-ip>"
   exit 1
 fi
 
 TARGET="$1"
 
 # ---------------------------------------------------------------------------
-# Helper: run a command locally or via SSH
+# Helper: run a command via SSH on the prod server
 # ---------------------------------------------------------------------------
 run() {
-  if [ "$TARGET" = "local" ]; then
-    eval "$@"
-  else
-    ssh -o StrictHostKeyChecking=no "root@$TARGET" "$@"
-  fi
+  ssh -o StrictHostKeyChecking=no "root@$TARGET" "$@"
 }
 
 COMPOSE_DIR="/opt/emr-agent"
 COMPOSE_CMD="cd $COMPOSE_DIR && docker compose -f docker-compose.prod.yml"
-if [ "$TARGET" = "local" ]; then
-  COMPOSE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-  COMPOSE_CMD="cd $COMPOSE_DIR && docker compose"
-fi
 
 MYSQL_CONTAINER=$(run "$COMPOSE_CMD ps --format '{{.Name}}' mysql" 2>/dev/null | head -1)
 OPENEMR_CONTAINER=$(run "$COMPOSE_CMD ps --format '{{.Name}}' openemr" 2>/dev/null | head -1)
@@ -197,11 +188,7 @@ echo "Done."
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== [6/7] Updating .env with OAuth credentials ==="
-if [ "$TARGET" = "local" ]; then
-  ENV_FILE="$COMPOSE_DIR/.env"
-else
-  ENV_FILE="/opt/emr-agent/.env"
-fi
+ENV_FILE="/opt/emr-agent/.env"
 
 run "sed -i 's|^OPENEMR_CLIENT_ID=.*|OPENEMR_CLIENT_ID=$CLIENT_ID|' '$ENV_FILE'"
 run "sed -i 's|^OPENEMR_CLIENT_SECRET=.*|OPENEMR_CLIENT_SECRET=$CLIENT_SECRET|' '$ENV_FILE'"
@@ -217,11 +204,7 @@ echo "Done."
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== [7/7] Restarting agent container ==="
-if [ "$TARGET" = "local" ]; then
-  (cd "$COMPOSE_DIR" && docker compose up -d agent)
-else
-  run "cd /opt/emr-agent && docker compose -f docker-compose.prod.yml --env-file .env up -d agent"
-fi
+run "cd /opt/emr-agent && docker compose -f docker-compose.prod.yml --env-file .env up -d agent"
 
 # ---------------------------------------------------------------------------
 # Verify token acquisition

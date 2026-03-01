@@ -6,7 +6,6 @@
 #
 # Usage:
 #   ./scripts/verify-deployment.sh <server-ip>    # remote (via SSH)
-#   ./scripts/verify-deployment.sh local           # local docker compose
 #
 # Exit code: 0 if all checks pass, 1 if any fail.
 set -uo pipefail
@@ -24,33 +23,21 @@ finish() {
 }
 
 if [ $# -lt 1 ]; then
-  echo "Usage: $0 <server-ip|local>"
+  echo "Usage: $0 <server-ip>"
   exit 1
 fi
 
 TARGET="$1"
 
 # ---------------------------------------------------------------------------
-# Helper: run a command locally or via SSH
+# Helper: run a command via SSH on the prod server
 # ---------------------------------------------------------------------------
 run() {
-  if [ "$TARGET" = "local" ]; then
-    eval "$@"
-  else
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "root@$TARGET" "$@"
-  fi
+  ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "root@$TARGET" "$@"
 }
 
-# ---------------------------------------------------------------------------
-# Determine compose context and container names
-# ---------------------------------------------------------------------------
-if [ "$TARGET" = "local" ]; then
-  COMPOSE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-  COMPOSE_CMD="cd $COMPOSE_DIR && docker compose"
-else
-  COMPOSE_DIR="/opt/emr-agent"
-  COMPOSE_CMD="cd $COMPOSE_DIR && docker compose -f docker-compose.prod.yml"
-fi
+COMPOSE_DIR="/opt/emr-agent"
+COMPOSE_CMD="cd $COMPOSE_DIR && docker compose -f docker-compose.prod.yml"
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
@@ -311,15 +298,11 @@ fi
 echo ""
 echo "── TLS Certificates ──"
 
-if [ "$TARGET" != "local" ]; then
-  CERT_EXISTS=$(run "test -f /etc/letsencrypt/live/emragent.404.mn/fullchain.pem && echo yes || echo no" 2>/dev/null || echo "no")
-  if [ "$CERT_EXISTS" = "yes" ]; then
-    check_pass "Let's Encrypt cert exists on host filesystem (immune to docker down -v)"
-  else
-    check_warn "No Let's Encrypt cert found — using self-signed (OK for dev)"
-  fi
+CERT_EXISTS=$(run "test -f /etc/letsencrypt/live/emragent.404.mn/fullchain.pem && echo yes || echo no" 2>/dev/null || echo "no")
+if [ "$CERT_EXISTS" = "yes" ]; then
+  check_pass "Let's Encrypt cert exists on host filesystem (immune to docker down -v)"
 else
-  check_pass "Local deploy — TLS check skipped"
+  check_warn "No Let's Encrypt cert found — using self-signed (OK for dev)"
 fi
 
 echo ""

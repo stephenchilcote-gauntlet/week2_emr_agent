@@ -2,39 +2,49 @@
 
 An AI-powered clinical workflow assistant embedded in OpenEMR. The agent reads patient records via FHIR R4, reasons about clinical tasks, and proposes changes through a **plan-then-confirm** workflow — no writes execute without clinician approval.
 
+## ⛔ NO LOCAL DOCKER
+
+There is NO local Docker deployment. All testing and development targets the
+**prod VPS** at `emragent.404.mn` (77.42.17.207). See `docs/DEPLOY.md` for
+deployment and operational details.
+
 ## Quick Start
+
+```bash
+# 1. Install dependencies
+uv sync
+
+# 2. Configure environment
+cp .env.example .env
+# Edit .env and set ANTHROPIC_API_KEY
+
+# 3. Open SSH tunnel to prod
+ssh -L 8000:localhost:8000 -L 16686:localhost:16686 root@77.42.17.207
+
+# 4. Run the agent locally against prod OpenEMR (for development)
+OPENEMR_BASE_URL=http://localhost:80 \
+  uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Access (via SSH tunnel)
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| **OpenEMR** | https://emragent.404.mn | `admin` / `pass` |
+| **Agent API** | `ssh -L 8000:localhost:8000 root@77.42.17.207` | Tunnel required |
+| **Jaeger Tracing** | `ssh -L 16686:localhost:16686 root@77.42.17.207` | Tunnel required |
 
 ### Deployment
 
 ```bash
-# 1. Start Docker
-sudo systemctl start docker
+# Agent-only deploy (~1 min):
+./scripts/deploy.sh 77.42.17.207
 
-# 2. Install dependencies
-uv sync
+# Full deploy (syncs everything, rebuilds all containers):
+./scripts/deploy.sh 77.42.17.207 --all
 
-# 3. Configure environment
-cp .env.example .env
-# Edit .env and set ANTHROPIC_API_KEY
-
-# 4. Start services (OpenEMR + MySQL + Jaeger + Agent)
-docker compose up -d
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### Access
-
-| Service | URL | Username | Password |
-|---------|-----|----------|----------|
-| **OpenEMR** | http://localhost | `admin` | `pass` |
-| **Agent API** | http://localhost:8000 | — | — |
-| **Jaeger Tracing** | http://localhost:16686 | — | — |
-
-### Health Check
-
-```bash
-curl http://localhost:8000/api/health
-curl http://localhost/apis/default/fhir/metadata
+# Full wipe and rebuild (new DB, new OAuth client):
+./scripts/deploy.sh 77.42.17.207 --fresh
 ```
 
 ## Architecture
@@ -97,7 +107,6 @@ curl http://localhost/apis/default/fhir/metadata
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) package manager
-- Docker & Docker Compose
 - Anthropic API key
 
 ### Install Dependencies
@@ -111,32 +120,6 @@ uv sync
 ```bash
 cp .env.example .env
 # Edit .env and set ANTHROPIC_API_KEY
-```
-
-### Start Services
-
-```bash
-# Start Docker if not running
-sudo systemctl start docker
-
-# Bring up OpenEMR + MySQL + Jaeger
-docker compose up -d
-
-# Wait for OpenEMR to initialize (~60s on first boot)
-# Check: curl http://localhost/apis/default/fhir/metadata
-
-# Start the agent backend
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### Verify
-
-```bash
-# Health check
-curl http://localhost:8000/api/health
-
-# FHIR metadata
-curl http://localhost:8000/api/fhir/metadata
 ```
 
 ## API Endpoints
@@ -154,6 +137,7 @@ curl http://localhost:8000/api/fhir/metadata
 ### Example Chat Request
 
 ```bash
+# Via SSH tunnel (ssh -L 8000:localhost:8000 root@77.42.17.207)
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
   -d '{
@@ -185,63 +169,33 @@ The eval suite runs 79 end-to-end cases through a real Playwright browser sessio
 | `clinical_precision` | 12 | 100% | Drug interactions, renal dosing, vital signs, medication stacks |
 | `dsl_fluency` | 15 | 100% | Manifest DSL: create/update/delete across FHIR resource types |
 
-#### Prerequisites
-
-The eval suite requires the full stack running:
+#### Running Evals (against prod via SSH tunnel)
 
 ```bash
-# Start Docker
-sudo systemctl start docker
+# Open SSH tunnel first
+ssh -L 18000:localhost:8000 root@77.42.17.207
 
-# Bring up OpenEMR + MySQL + Jaeger
-docker compose up -d
-
-# Start the agent backend
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
-
-# Install Playwright browsers (first time only)
-uv run playwright install chromium
-```
-
-#### Running Evals
-
-```bash
 # Run all 79 eval cases (~40 minutes)
-uv run pytest tests/e2e/test_agent_evals.py -m e2e -k "test_eval_" -v
-
-# Run a single case by ID (use underscores, not hyphens)
-uv run pytest tests/e2e/test_agent_evals.py -m e2e -k "test_eval_hp_01"
-
-# Run all cases in a category
-uv run pytest tests/e2e/test_agent_evals.py -m e2e -k "test_eval_adv"
-uv run pytest tests/e2e/test_agent_evals.py -m e2e -k "test_eval_cp"
-uv run pytest tests/e2e/test_agent_evals.py -m e2e -k "test_eval_dsl"
-uv run pytest tests/e2e/test_agent_evals.py -m e2e -k "test_eval_oq"
+AGENT_BASE_URL=http://localhost:18000 \
+  uv run pytest tests/e2e/test_agent_evals.py -m e2e -k "test_eval_" -v
 
 # Enable LLM-as-judge checks (Claude Haiku + Kimi K2.5)
-ENABLE_LLM_JUDGE=1 uv run pytest tests/e2e/test_agent_evals.py -m e2e -k "test_eval_" -v
+AGENT_BASE_URL=http://localhost:18000 \
+  ENABLE_LLM_JUDGE=1 uv run pytest tests/e2e/test_agent_evals.py -m e2e -k "test_eval_" -v
 ```
 
 #### Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `AGENT_BASE_URL` | `http://localhost:8000` | Agent API root |
-| `OPENEMR_URL` | `http://localhost:80` | OpenEMR root |
+| `AGENT_BASE_URL` | `http://localhost:8000` | Agent API root (use SSH tunnel) |
+| `OPENEMR_URL` | `http://localhost:80` | OpenEMR root (use SSH tunnel or prod URL) |
 | `OPENEMR_USER` | `admin` | OpenEMR login username |
 | `OPENEMR_PASS` | `pass` | OpenEMR login password |
 | `E2E_TIMEOUT_MS` | `120000` | Per-action timeout (ms) for LLM calls |
 | `ANTHROPIC_API_KEY` | — | Required for agent + Claude Haiku judge |
 | `OPENROUTER_API_KEY` | — | Required for Kimi K2.5 refusal judge |
 | `ENABLE_LLM_JUDGE` | `0` | Set to `1` to enable LLM judge checks |
-
-#### Viewing the Report
-
-The full evaluation report with per-case results, assertion details, and behavioral analysis:
-
-```bash
-cat EVAL_REPORT.md
-```
 
 #### Eval Dataset
 
@@ -258,11 +212,11 @@ The eval cases live in `tests/eval/dataset.json`. Each case specifies:
     "patient_name": "Maria Santos"
   },
   "expected": {
-    "tool_calls": ["fhir_read"],           // tools the agent should invoke
-    "manifest_items": [],                   // expected manifest entries (resource_type + action)
-    "should_refuse": false,                 // whether the agent should refuse the request
-    "output_contains": ["maria", "santos"], // keywords that must appear in response
-    "output_not_contains": []               // keywords that must NOT appear
+    "tool_calls": ["fhir_read"],
+    "manifest_items": [],
+    "should_refuse": false,
+    "output_contains": ["maria", "santos"],
+    "output_not_contains": []
   }
 }
 ```
@@ -271,11 +225,9 @@ LLM judge checks are defined separately in `tests/e2e/judge_checks.py`, keyed by
 
 ## Observability
 
-Traces are exported via OpenTelemetry to Jaeger:
+Traces are exported via OpenTelemetry to Jaeger on the prod VPS:
 
-- **Jaeger UI**: http://localhost:16686
-- **OTLP gRPC**: localhost:4317
-- **OTLP HTTP**: localhost:4318
+- **Jaeger UI**: `ssh -L 16686:localhost:16686 root@77.42.17.207` → http://localhost:16686
 
 Every LLM call, tool invocation, and verification check emits a span with attributes for token counts, latency, and manifest operations.
 
@@ -310,9 +262,11 @@ tests/
 │   └── judge_checks.py  # Judge check definitions by case ID
 └── conftest.py
 
-docker/
+docker/                  # ⚠️ PROD ONLY — used by scripts/deploy.sh
 ├── Dockerfile           # Agent backend container
-└── seed_data.sql        # Synthetic patient data (3 patients)
+├── Dockerfile.openemr   # OpenEMR container with module
+├── seed_data.sql        # Synthetic patient data
+└── start.sh             # OpenEMR startup (certs, proxy)
 ```
 
 ## Seed Data

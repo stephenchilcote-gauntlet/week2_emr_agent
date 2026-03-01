@@ -23,6 +23,17 @@ cherry-pick a subset of commits off a branch with more history behind it.
 For parallel work in worktrees, push to the worktree branch and let the human
 merge — never merge into master unilaterally from a worktree.
 
+## ⛔ NO LOCAL DOCKER
+
+There is NO local Docker deployment. Do NOT run `docker compose up`, `docker build`,
+`systemctl start docker`, or any Docker commands locally. There is no `docker-compose.yml`.
+
+All testing and deployment targets the **prod VPS** at `emragent.404.mn` (77.42.17.207).
+See `docs/DEPLOY.md` for deployment instructions. See the README for test instructions.
+
+The `docker/` directory contains Dockerfiles and scripts used exclusively by the
+**prod deployment pipeline** (`scripts/deploy.sh`). Do not use them locally.
+
 ## Parallel work
 
 Multiple agents cannot be on different branches in the same working directory.

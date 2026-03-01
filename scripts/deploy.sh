@@ -83,7 +83,7 @@ BAD_PATTERNS='(https?://172\.[0-9]+\.[0-9]+\.[0-9]+|https?://192\.168\.[0-9]+\.[
 # Only scan files that end up inside containers (src/, web/, openemr module PHP)
 BAD_FILES=$(grep -rEn "$BAD_PATTERNS" \
   --include='*.py' --include='*.php' --include='*.js' --include='*.css' --include='*.html' \
-  src/ web/ openemr/interface/modules/custom_modules/ 2>/dev/null || true)
+  src/ web/ openemr-module/ 2>/dev/null || true)
 
 if [ -n "$BAD_FILES" ]; then
   echo ""
