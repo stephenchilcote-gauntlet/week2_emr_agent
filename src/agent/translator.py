@@ -37,11 +37,14 @@ _REST_PATH_MAP = {
     "Encounter": "encounter",
     "SoapNote": "soap_note",
     "Vital": "vital",
+    "Surgery": "surgery",
+    "Appointment": "appointment",
+    "Referral": "transaction",
 }
 
 # OpenEMR REST endpoints that use numeric PID instead of UUID in the path.
 # Most endpoints use :puuid but the medication endpoint uses :pid.
-_PID_ENDPOINTS = {"MedicationRequest", "SoapNote", "Vital"}
+_PID_ENDPOINTS = {"MedicationRequest", "SoapNote", "Vital", "Surgery", "Appointment", "Referral"}
 
 # Endpoints that require an encounter ID in the path.
 _ENCOUNTER_ENDPOINTS = {"SoapNote", "Vital"}
@@ -294,6 +297,100 @@ def _build_vital_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
     return result
 
 
+def _build_surgery_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
+    """Build an OpenEMR REST surgery payload from DSL attributes.
+
+    Maps to: POST/PUT /apis/default/api/patient/{pid}/surgery
+    Same ListRestController pattern as medications.
+    Schema: title (required), begdate (required), enddate, diagnosis.
+    """
+    attrs = item.attrs
+    title = attrs.get("title", "") or attrs.get("display", "")
+
+    begdate = _as_datetime(attrs.get("begdate"))
+    if not begdate and item.action == "add":
+        from datetime import date
+        begdate = f"{date.today().isoformat()} 00:00:00"
+
+    return {
+        "title": title,
+        "begdate": begdate,
+        "enddate": _as_datetime(attrs.get("enddate")),
+        "diagnosis": _date_or_none(attrs.get("diagnosis")),
+    }
+
+
+def _build_appointment_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
+    """Build an OpenEMR REST appointment payload from DSL attributes.
+
+    Maps to: POST /apis/default/api/patient/{pid}/appointment
+    OpenEMR uses ``pc_*`` prefixed fields with strict validation.
+    """
+    attrs = item.attrs
+    result: dict[str, Any] = {}
+
+    field_map = {
+        "pc_catid": ("category", "pc_catid"),
+        "pc_title": ("title", "pc_title"),
+        "pc_duration": ("duration", "pc_duration"),
+        "pc_hometext": ("reason", "pc_hometext"),
+        "pc_apptstatus": ("status", "pc_apptstatus"),
+        "pc_facility": ("facility", "pc_facility"),
+        "pc_billing_location": ("billing_facility", "pc_billing_location"),
+        "pc_aid": ("provider", "pc_aid"),
+    }
+
+    for pc_key, aliases in field_map.items():
+        for alias in aliases:
+            val = attrs.get(alias)
+            if val is not None:
+                result[pc_key] = val
+                break
+
+    event_date = _as_date(attrs.get("date") or attrs.get("pc_eventDate"))
+    if event_date is not None:
+        result["pc_eventDate"] = event_date
+
+    start_time = attrs.get("start_time") or attrs.get("pc_startTime")
+    if start_time is not None:
+        result["pc_startTime"] = start_time
+
+    return result
+
+
+def _build_referral_rest(item: DslItem, patient_uuid: str) -> dict[str, Any]:
+    """Build an OpenEMR REST transaction (referral) payload from DSL attributes.
+
+    Maps to: POST /apis/default/api/patient/{pid}/transaction
+    OpenEMR transactions with type ``LBTref`` are referrals.
+    """
+    attrs = item.attrs
+    result: dict[str, Any] = {
+        "type": "LBTref",
+        "groupname": "Default",
+    }
+
+    referral_date = _as_date(attrs.get("referral_date"))
+    if referral_date is not None:
+        result["referralDate"] = referral_date
+
+    body = attrs.get("body")
+    if body is not None:
+        result["body"] = body
+
+    for dsl_key, api_key in (
+        ("refer_by_npi", "referByNpi"),
+        ("refer_to_npi", "referToNpi"),
+        ("diagnosis", "referDiagnosis"),
+        ("risk_level", "riskLevel"),
+    ):
+        val = attrs.get(dsl_key)
+        if val is not None:
+            result[api_key] = val
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Builder registry
 # ---------------------------------------------------------------------------
@@ -305,4 +402,7 @@ _REST_BUILDERS = {
     "Encounter": _build_encounter_rest,
     "SoapNote": _build_soap_note_rest,
     "Vital": _build_vital_rest,
+    "Surgery": _build_surgery_rest,
+    "Appointment": _build_appointment_rest,
+    "Referral": _build_referral_rest,
 }
