@@ -198,3 +198,9 @@ URL: `encounter_top.php?set_encounter={id}` → `navigateTab(url, "enc")` → `a
 - OpenEMR flex startup is slow (~3-4 min) — agent will fail FHIR calls during this window
 - `restart: unless-stopped` means a misconfigured OpenEMR will restart-loop forever — watch `docker logs -f week2_emr_agent-openemr-1`
 - Pydantic V2 deprecation warnings in tests (class-based config, `utcnow()`) — cosmetic only
+
+## Deployment Gotchas
+
+- **Stale `openemr/` tree**: The `openemr/` dir contains a full OpenEMR source copy including the module assets. `Dockerfile.openemr` COPYs `openemr/` first, then overwrites with `web/sidebar/*.js`. But the flex startup script may clobber the overwrite. Always sync: `cp web/sidebar/*.js openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/` before building.
+- **Playwright `page.frame(name='pat')` doesn't work**: embed.js restructures the DOM (wraps body children in `#ca-content`), which confuses Playwright's frame detection. Use `page.frame_locator('iframe[name=pat]')` instead.
+- **embed.js `mount()` can run multiple times** if the IIFE guard passes before the sidebar div is created (race between DOMContentLoaded listeners). The guard inside `mount()` prevents this.
