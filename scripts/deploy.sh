@@ -131,10 +131,11 @@ else
   echo "=== Agent-only sync (skipping openemr/) to $SERVER:$REMOTE_DIR ==="
 fi
 
-# -L / --copy-links: dereference symlinks instead of copying the link itself.
-# Without this, a dev-machine symlink (e.g. assets/ → web/sidebar/) is sent to
-# the server as a dangling symlink, silently breaking the Docker build.
-rsync -avzL --delete \
+# --copy-unsafe-links: dereference only symlinks whose targets fall OUTSIDE the
+# transfer root (e.g. absolute paths like /home/login/.../web/sidebar/foo.js).
+# Relative in-tree symlinks (openemr/node_modules/.bin/*) are preserved as-is.
+# -L (--copy-links) would dereference everything and break node_modules/.bin/.
+rsync -avz --copy-unsafe-links --delete \
   "${RSYNC_EXCLUDES[@]}" \
   ./ "$SERVER:$REMOTE_DIR/"
 
