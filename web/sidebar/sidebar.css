@@ -369,16 +369,23 @@ body {
   margin: 0.8em 0;
 }
 
+.markdown .table-wrap {
+  overflow-x: auto;
+  margin: 0.5em 0;
+  -webkit-overflow-scrolling: touch;
+}
+
 .markdown table {
   border-collapse: collapse;
-  width: 100%;
-  margin: 0.5em 0;
+  width: max-content;
+  min-width: 100%;
   font-size: 0.9em;
 }
 .markdown th, .markdown td {
   border: 1px solid var(--border);
-  padding: 4px 8px;
+  padding: 4px 10px;
   text-align: left;
+  white-space: nowrap;
 }
 .markdown th {
   background: rgba(0, 0, 0, 0.04);

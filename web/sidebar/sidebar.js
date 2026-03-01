@@ -1306,7 +1306,8 @@ class SidebarApp {
   }
 
   renderMarkdown(text) {
-    return marked.parse(text || "", { breaks: true })
+    const html = marked.parse(text || "", { breaks: true })
+    return html.replace(/<table[\s\S]*?<\/table>/g, (m) => `<div class="table-wrap">${m}</div>`)
   }
 
   escapeHtml(value) {
