@@ -377,15 +377,15 @@ body {
 
 .markdown table {
   border-collapse: collapse;
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
   font-size: 0.9em;
 }
 .markdown th, .markdown td {
   border: 1px solid var(--border);
   padding: 4px 10px;
   text-align: left;
-  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .markdown th {
   background: rgba(0, 0, 0, 0.04);
