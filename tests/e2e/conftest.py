@@ -22,8 +22,8 @@ import pytest
 from playwright.sync_api import Frame, Page, expect
 
 
-AGENT_BASE_URL = os.environ.get("AGENT_BASE_URL", "http://localhost:8000")
-OPENEMR_URL = os.environ.get("OPENEMR_URL", "http://localhost:80")
+AGENT_BASE_URL = os.environ.get("AGENT_BASE_URL", "https://emragent.404.mn/agent-api")
+OPENEMR_URL = os.environ.get("OPENEMR_URL", "https://emragent.404.mn")
 OPENEMR_USER = os.environ.get("OPENEMR_USER", "admin")
 OPENEMR_PASS = os.environ.get("OPENEMR_PASS", "pass")
 E2E_TIMEOUT_MS = int(os.environ.get("E2E_TIMEOUT_MS", "120000"))

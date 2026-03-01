@@ -29,9 +29,9 @@ PATIENT_PID_KOWALSKI = "5"
 
 # Remote execution via SSH for prod deployments.
 # Set E2E_SSH_HOST to run DB queries on a remote VPS (e.g. "root@77.42.17.207").
-E2E_SSH_HOST = os.environ.get("E2E_SSH_HOST", "")
-E2E_MYSQL_CONTAINER = os.environ.get("E2E_MYSQL_CONTAINER", "week2_emr_agent-mysql-1")
-E2E_MYSQL_PASS = os.environ.get("E2E_MYSQL_PASS", "openemr")
+E2E_SSH_HOST = os.environ.get("E2E_SSH_HOST", "root@77.42.17.207")
+E2E_MYSQL_CONTAINER = os.environ.get("E2E_MYSQL_CONTAINER", "emr-agent-mysql-1")
+E2E_MYSQL_PASS = os.environ.get("E2E_MYSQL_PASS", "mS6mi7EacAWCzdjzWV1dfuyNQJpuH9")
 
 
 def _db_query(sql: str) -> str:
