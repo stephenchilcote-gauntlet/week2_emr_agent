@@ -116,9 +116,9 @@ def select_patient(
         f"""() => {{
             const top = window.top || window;
             if (!top.openemrAgentContext) {{ top.openemrAgentContext = {{}}; }}
-            top.openemrAgentContext.pid = {pid};
+            top.openemrAgentContext.pid = {json.dumps(str(pid))};
             top.openemrAgentContext.patient_name = {json.dumps(name)};
-            {f'top.openemrAgentContext.encounter = {json.dumps(encounter_id)};' if encounter_id else ''}
+            top.openemrAgentContext.encounter = {json.dumps(encounter_id)};
         }}"""
     )
     # Brief pause for the sidebar iframe to read the updated context

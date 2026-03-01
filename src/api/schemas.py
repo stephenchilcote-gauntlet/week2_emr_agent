@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PageContextRequest(BaseModel):
@@ -10,6 +10,14 @@ class PageContextRequest(BaseModel):
     encounter_id: str | None = None
     page_type: str | None = None
     visible_data: dict[str, Any] | None = None
+
+    @field_validator("patient_id", "encounter_id", mode="before")
+    @classmethod
+    def coerce_to_str(cls, v: Any) -> str | None:
+        """Accept integer IDs from older embed.js versions that poll Knockout."""
+        if v is None:
+            return None
+        return str(v)
 
 
 class ChatRequest(BaseModel):

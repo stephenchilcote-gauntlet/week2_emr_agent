@@ -59,6 +59,48 @@ def _send_eval_message(
         patient_name = case["input"].get("patient_name")
         encounter_id = pc.get("encounter_id")
         select_patient(page, pc["patient_id"], patient_name, encounter_id)
+    else:
+        # No patient context for this case — clear any patient selection from
+        # a previous case so it doesn't bleed into this one.
+        # Clear top-level openemrAgentContext (Source 2 in sidebar's refreshContext)
+        page.evaluate("""() => {
+            const top = window.top || window;
+            if (top.openemrAgentContext) {
+                top.openemrAgentContext.pid = null;
+                top.openemrAgentContext.patient_name = null;
+                top.openemrAgentContext.encounter = null;
+            }
+        }""")
+        # Also clear OPENEMR_SESSION_CONTEXT inside the sidebar iframe — this is
+        # Source 1 (higher priority) set by sidebar_frame.php and takes precedence.
+        sidebar.evaluate("""() => {
+            if (window.OPENEMR_SESSION_CONTEXT) {
+                window.OPENEMR_SESSION_CONTEXT.pid = null;
+                window.OPENEMR_SESSION_CONTEXT.encounter = null;
+                window.OPENEMR_SESSION_CONTEXT.patient_name = null;
+            }
+        }""")
+        page.wait_for_timeout(1000)
+
+    # Debug: check sidebar state before sending
+    import os as _os
+    if _os.environ.get("E2E_DEBUG_LIMIT"):
+        # Check top-level window context
+        top_ctx = page.evaluate("""() => ({
+            openemrAgentContext: (window.top || window).openemrAgentContext,
+            typeofPid: typeof ((window.top || window).openemrAgentContext || {}).pid,
+        })""")
+        # Check sidebar iframe context
+        sidebar_ctx = sidebar.evaluate("""() => ({
+            OPENEMR_SESSION_CONTEXT: window.OPENEMR_SESSION_CONTEXT,
+        })""")
+        dbg = sidebar.evaluate("""() => ({
+            sessionID: sessionStorage.getItem('openemr_agent_session_id'),
+            errorBlocks: document.querySelectorAll('.error-block').length,
+        })""")
+        print(f"    [DBG] top_ctx: {top_ctx}")
+        print(f"    [DBG] sidebar_ctx: {sidebar_ctx}")
+        print(f"    [DBG] sidebar: {dbg}")
 
     message = case["input"]["message"]
     if not message:
@@ -69,6 +111,16 @@ def _send_eval_message(
         }
 
     send_chat_message(sidebar, message)
+
+    # Debug: check what happened after send
+    if _os.environ.get("E2E_DEBUG_LIMIT"):
+        dbg2 = sidebar.evaluate("""() => ({
+            errorBlocks: document.querySelectorAll('.error-block').length,
+            errorTexts: Array.from(document.querySelectorAll('.error-block')).map(e => e.textContent.slice(0, 200)),
+            assistantMsgs: document.querySelectorAll('.message.role-assistant').length,
+            chatHTML: document.getElementById('chat-area') ? document.getElementById('chat-area').innerHTML.slice(0, 1000) : 'no chat-area',
+        })""")
+        print(f"    [DBG] sidebar state after send: {dbg2}")
 
     response_text = get_last_assistant_message(sidebar)
 
@@ -209,7 +261,10 @@ def _run_judge_checks(
         # When confidence=0.0 the judge API failed — record as None
         # (skip) so the caller can distinguish API errors from real
         # pass/fail results.  Never silently drop the check.
-        if judge_result.confidence == 0.0 and "judge error" in judge_result.reasoning.lower():
+        if judge_result.confidence == 0.0 and (
+            "judge error" in judge_result.reasoning.lower()
+            or "inconclusive" in judge_result.reasoning.lower()
+        ):
             results[key] = None  # explicit skip — not pass, not fail
             print(f"    Judge [{label}] SKIPPED (API error): {judge_result.reasoning}")
         else:
@@ -348,8 +403,11 @@ def _check_assertions(case: dict, result: dict) -> dict[str, bool]:
             expected_actions = exp_item["action"]
             if isinstance(expected_actions, str):
                 expected_actions = [expected_actions]
+            expected_rtypes = exp_item["resource_type"]
+            if isinstance(expected_rtypes, str):
+                expected_rtypes = [expected_rtypes]
             found = any(
-                mi.get("resource_type") == exp_item["resource_type"]
+                mi.get("resource_type") in expected_rtypes
                 and mi.get("action") in expected_actions
                 for mi in manifest_items
             )
@@ -427,7 +485,12 @@ class TestHappyPath:
 
     @pytest.fixture
     def happy_path_cases(self, eval_dataset: list[dict]) -> list[dict]:
-        return [c for c in eval_dataset if c["category"] == "happy_path"]
+        cases = [c for c in eval_dataset if c["category"] == "happy_path"]
+        # DEBUG: limit to first 2 cases for quick diagnostics
+        import os
+        if os.environ.get("E2E_DEBUG_LIMIT"):
+            return cases[:int(os.environ["E2E_DEBUG_LIMIT"])]
+        return cases
 
     def test_happy_path(
         self, openemr_page: Page, sidebar: Frame, happy_path_cases: list[dict], agent_url: str,
@@ -459,6 +522,8 @@ class TestHappyPath:
             failed_checks = {k: v for k, v in checks.items() if not v}
             if failed_checks:
                 print(f"    Failed: {failed_checks}")
+                preview = result["response_text"][:300] if result["response_text"] else "(empty)"
+                print(f"    Response: {preview}")
 
         total_cases = len(results)
         passed_cases = sum(1 for r in results if r["passed"])

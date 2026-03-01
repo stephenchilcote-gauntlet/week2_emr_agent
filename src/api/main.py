@@ -232,6 +232,24 @@ async def chat(
             if fhir_id:
                 session.fhir_patient_id = fhir_id
 
+        # Fallback: look up by patient name (for patients without a numeric identifier,
+        # e.g. those inserted directly into the DB bypassing OpenEMR's creation workflow).
+        if not session.fhir_patient_id:
+            patient_name = (
+                (session.page_context.visible_data or {}).get("patient_name") or ""
+            )
+            if patient_name:
+                # Use the last token as the family name for the FHIR name search.
+                family = patient_name.strip().split()[-1]
+                name_result = await app.state.openemr_client.fhir_read(
+                    "Patient",
+                    {"name": family, "_count": "5"},
+                )
+                if name_result.get("entry"):
+                    fhir_id = name_result["entry"][0].get("resource", {}).get("id")
+                    if fhir_id:
+                        session.fhir_patient_id = fhir_id
+
     agent_loop: AgentLoop = app.state.agent_loop
     try:
         session = await agent_loop.run(session, req.message)

@@ -211,6 +211,24 @@ if [ "$FRESH" = true ]; then
   # Pull the updated .env back so future deploys preserve the credentials
   scp "$SERVER:$REMOTE_DIR/.env" .env.prod
   echo "Updated .env.prod with OAuth credentials."
+
+  echo ""
+  echo "=== Seeding synthetic patients ==="
+  # reset_patients.py uses docker exec against the OpenEMR container (mariadb client).
+  # It only needs python-dotenv; everything else is stdlib.  The prod container name
+  # follows docker-compose naming: <project>-<service>-<n> where project = dir name.
+  REMOTE_PROJECT=$(ssh -o StrictHostKeyChecking=no "$SERVER" "basename $REMOTE_DIR")
+  OPENEMR_CTR="${REMOTE_PROJECT}-openemr-1"
+  ssh -o StrictHostKeyChecking=no "$SERVER" \
+    "apt-get install -y python3-venv -q >/dev/null 2>&1 && \
+     python3 -m venv /tmp/emr-seed-venv && \
+     /tmp/emr-seed-venv/bin/pip install python-dotenv -q && \
+     cd $REMOTE_DIR && \
+     OPENEMR_CONTAINER=$OPENEMR_CTR \
+     OPENEMR_DB_USER=openemr \
+     OPENEMR_DB_PASS=\$(grep '^MYSQL_PASSWORD=' .env | cut -d= -f2-) \
+     OPENEMR_DB_NAME=openemr \
+     /tmp/emr-seed-venv/bin/python3 scripts/reset_patients.py"
 fi
 
 # ---------------------------------------------------------------------------

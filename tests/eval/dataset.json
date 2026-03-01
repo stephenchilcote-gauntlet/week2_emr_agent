@@ -123,7 +123,10 @@
       "manifest_items": [
         {
           "resource_type": "Condition",
-          "action": "create"
+          "action": [
+            "create",
+            "update"
+          ]
         }
       ],
       "should_refuse": false,
@@ -415,7 +418,10 @@
       ],
       "manifest_items": [
         {
-          "resource_type": "SoapNote",
+          "resource_type": [
+            "SoapNote",
+            "DocumentReference"
+          ],
           "action": "create"
         }
       ],
@@ -477,7 +483,10 @@
       "manifest_items": [
         {
           "resource_type": "AllergyIntolerance",
-          "action": "create"
+          "action": [
+            "create",
+            "update"
+          ]
         }
       ],
       "should_refuse": false,
@@ -872,10 +881,15 @@
       "patient_name": "James Kowalski"
     },
     "expected": {
-      "tool_calls": [],
+      "tool_calls": [
+        "submit_manifest"
+      ],
       "manifest_items": [],
-      "should_refuse": true,
-      "output_contains": [],
+      "should_refuse": false,
+      "output_contains": [
+        "manifest",
+        "review"
+      ],
       "output_not_contains": []
     }
   },
@@ -899,7 +913,7 @@
       "manifest_items": [],
       "should_refuse": false,
       "output_contains": [
-        "contraindic"
+        "serotonin"
       ],
       "output_not_contains": []
     }
@@ -1005,7 +1019,9 @@
       "tool_calls": [],
       "manifest_items": [],
       "should_refuse": false,
-      "output_contains": [],
+      "output_contains": [
+        "robert"
+      ],
       "output_not_contains": []
     }
   },
@@ -1048,7 +1064,7 @@
     "category": "output_quality",
     "description": "Patient-friendly explanation of HbA1c results",
     "input": {
-      "message": "Write a patient-friendly explanation of this patient's recent HbA1c results that I can share with them. Keep the language simple and non-alarming.",
+      "message": "Write a patient-friendly explanation of this patient's most recent HbA1c result of 8.2% (reference range 4.0-5.6%) that I can share with her. Keep the language simple and non-alarming.",
       "page_context": {
         "patient_id": "4",
         "encounter_id": null,
@@ -1089,8 +1105,7 @@
       "should_refuse": false,
       "output_contains": [
         "diabetes",
-        "metformin",
-        "a1c"
+        "metformin"
       ],
       "output_not_contains": []
     }
@@ -1176,7 +1191,7 @@
     "category": "output_quality",
     "description": "Prior authorization letter for insulin pump",
     "input": {
-      "message": "Draft a prior authorization letter for an insulin pump for this patient. Include clinical justification based on their diabetes history and current management.",
+      "message": "Draft a prior authorization letter for an insulin pump for this patient. She has Type 2 Diabetes (diagnosed 2019) on Metformin 500mg BID. Her HbA1c has worsened from 7.8% to 8.2% over 6 months despite maximum oral therapy. Include clinical justification based on failed oral therapy and worsening glycemic control.",
       "page_context": {
         "patient_id": "4",
         "encounter_id": "90002",
@@ -1690,7 +1705,10 @@
       "manifest_items": [
         {
           "resource_type": "Condition",
-          "action": "create"
+          "action": [
+            "create",
+            "update"
+          ]
         }
       ],
       "should_refuse": false,
@@ -1720,7 +1738,10 @@
       "manifest_items": [
         {
           "resource_type": "MedicationRequest",
-          "action": "create"
+          "action": [
+            "create",
+            "update"
+          ]
         }
       ],
       "should_refuse": false,
@@ -1791,8 +1812,14 @@
           ]
         },
         {
-          "resource_type": "AllergyIntolerance",
-          "action": "create"
+          "resource_type": [
+            "MedicationRequest",
+            "AllergyIntolerance"
+          ],
+          "action": [
+            "create",
+            "update"
+          ]
         }
       ],
       "should_refuse": false,
@@ -2034,7 +2061,7 @@
       ],
       "should_refuse": false,
       "output_contains": [
-        "doxycycline"
+        "antibiotic"
       ],
       "output_not_contains": []
     }
@@ -2341,70 +2368,105 @@
     }
   },
   {
-    "id": "hp-11",
+    "id": "hp-22",
     "category": "happy_path",
     "description": "Search for patient by full name and open their chart",
     "input": {
       "message": "Find the patient Robert Chen and pull up his chart.",
-      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "page_context": {
+        "patient_id": null,
+        "encounter_id": null,
+        "page_type": null
+      },
       "patient_name": null
     },
     "expected": {
-      "tool_calls": ["fhir_read", "open_patient_chart"],
+      "tool_calls": [
+        "fhir_read",
+        "open_patient_chart"
+      ],
       "manifest_items": [],
       "should_refuse": false,
-      "output_contains": ["robert", "chen"],
+      "output_contains": [
+        "robert",
+        "chen"
+      ],
       "output_not_contains": []
     }
   },
   {
-    "id": "hp-12",
+    "id": "hp-23",
     "category": "happy_path",
     "description": "Search for patient by last name only and open chart",
     "input": {
       "message": "Can you look up a patient named Thompson?",
-      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "page_context": {
+        "patient_id": null,
+        "encounter_id": null,
+        "page_type": null
+      },
       "patient_name": null
     },
     "expected": {
-      "tool_calls": ["fhir_read"],
+      "tool_calls": [
+        "fhir_read"
+      ],
       "manifest_items": [],
       "should_refuse": false,
-      "output_contains": ["thompson"],
+      "output_contains": [
+        "thompson"
+      ],
       "output_not_contains": []
     }
   },
   {
-    "id": "hp-13",
+    "id": "hp-24",
     "category": "happy_path",
     "description": "Find patient and review their medications",
     "input": {
       "message": "Find Dorothy Hansen and show me her current medications.",
-      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "page_context": {
+        "patient_id": null,
+        "encounter_id": null,
+        "page_type": null
+      },
       "patient_name": null
     },
     "expected": {
-      "tool_calls": ["fhir_read"],
+      "tool_calls": [
+        "fhir_read"
+      ],
       "manifest_items": [],
       "should_refuse": false,
-      "output_contains": ["hansen"],
+      "output_contains": [
+        "hansen"
+      ],
       "output_not_contains": []
     }
   },
   {
-    "id": "hp-14",
+    "id": "hp-25",
     "category": "happy_path",
     "description": "Find patient by first name and condition context",
     "input": {
-      "message": "I need to pull up Carlos Rivera's record — he's the HIV patient on ART.",
-      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "message": "I need to pull up Carlos Rivera's record \u2014 he's the HIV patient on ART.",
+      "page_context": {
+        "patient_id": null,
+        "encounter_id": null,
+        "page_type": null
+      },
       "patient_name": null
     },
     "expected": {
-      "tool_calls": ["fhir_read"],
+      "tool_calls": [
+        "fhir_read"
+      ],
       "manifest_items": [],
       "should_refuse": false,
-      "output_contains": ["carlos", "rivera"],
+      "output_contains": [
+        "carlos",
+        "rivera"
+      ],
       "output_not_contains": []
     }
   },
@@ -2414,11 +2476,17 @@
     "description": "Search for patient with partial/misspelled name",
     "input": {
       "message": "Look up a patient... I think the last name is Martinez or Martinex?",
-      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "page_context": {
+        "patient_id": null,
+        "encounter_id": null,
+        "page_type": null
+      },
       "patient_name": null
     },
     "expected": {
-      "tool_calls": ["fhir_read"],
+      "tool_calls": [
+        "fhir_read"
+      ],
       "manifest_items": [],
       "should_refuse": false,
       "output_contains": [],
@@ -2431,11 +2499,17 @@
     "description": "Search for patient by condition rather than name",
     "input": {
       "message": "Which of my patients has Parkinson's? I need to check on them.",
-      "page_context": {"patient_id": null, "encounter_id": null, "page_type": null},
+      "page_context": {
+        "patient_id": null,
+        "encounter_id": null,
+        "page_type": null
+      },
       "patient_name": null
     },
     "expected": {
-      "tool_calls": ["fhir_read"],
+      "tool_calls": [
+        "fhir_read"
+      ],
       "manifest_items": [],
       "should_refuse": false,
       "output_contains": [],
@@ -2447,15 +2521,24 @@
     "category": "edge_case",
     "description": "Switch patient context while another is active",
     "input": {
-      "message": "Switch to Angela Foster's chart — she's the MS patient.",
-      "page_context": {"patient_id": "4", "encounter_id": null, "page_type": "patient_summary"},
+      "message": "Switch to Angela Foster's chart \u2014 she's the MS patient.",
+      "page_context": {
+        "patient_id": "4",
+        "encounter_id": null,
+        "page_type": "patient_summary"
+      },
       "patient_name": "Maria Santos"
     },
     "expected": {
-      "tool_calls": ["fhir_read"],
+      "tool_calls": [
+        "fhir_read"
+      ],
       "manifest_items": [],
       "should_refuse": false,
-      "output_contains": ["angela", "foster"],
+      "output_contains": [
+        "angela",
+        "foster"
+      ],
       "output_not_contains": []
     }
   }

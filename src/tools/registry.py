@@ -120,6 +120,13 @@ async def tool_fhir_read(
     params: dict | None = None,
 ) -> dict:
     """Read FHIR resources (e.g. Patient, Condition, MedicationRequest)."""
+    # OpenEMR's FHIR server has a small default page size and reports total
+    # as the page count (non-standard). Inject _count so list queries always
+    # return the full result set rather than a misleading truncated first page.
+    if "/" not in resource_type:
+        merged = dict(params or {})
+        merged.setdefault("_count", "1000")
+        params = merged
     return await client.fhir_read(resource_type, params)
 
 

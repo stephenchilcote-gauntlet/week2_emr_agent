@@ -105,18 +105,25 @@ if ($method === 'POST' && preg_match('#^/api/chat$#', $path) && $requestBody !==
         if (!isset($payload['page_context']) || !is_array($payload['page_context'])) {
             $payload['page_context'] = [];
         }
-        // Server-side values override client-side (authoritative source)
-        if ($sessionPid) {
+        // Use server-side session values as a fallback only when the sidebar
+        // did not already provide the field.  The sidebar's embed.js reflects
+        // the real-time Knockout observable (fires immediately on patient
+        // switch), while the PHP session update is asynchronous (happens only
+        // after the patient PHP page finishes loading).  Trusting the sidebar
+        // when it has already set a value avoids a stale-session race condition.
+        if ($sessionPid && empty($payload['page_context']['patient_id'])) {
             $payload['page_context']['patient_id'] = $sessionPid;
         }
-        if ($sessionEncounter) {
+        if ($sessionEncounter && empty($payload['page_context']['encounter_id'])) {
             $payload['page_context']['encounter_id'] = $sessionEncounter;
         }
         if ($patientName) {
             if (!isset($payload['page_context']['visible_data']) || !is_array($payload['page_context']['visible_data'])) {
                 $payload['page_context']['visible_data'] = [];
             }
-            $payload['page_context']['visible_data']['patient_name'] = $patientName;
+            if (empty($payload['page_context']['visible_data']['patient_name'])) {
+                $payload['page_context']['visible_data']['patient_name'] = $patientName;
+            }
         }
         $requestBody = json_encode($payload);
     }
