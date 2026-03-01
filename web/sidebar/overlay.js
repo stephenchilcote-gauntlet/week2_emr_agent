@@ -1,4 +1,7 @@
 (function initOverlayEngine() {
+  // Guard against double-loading (e.g. embed.js injected twice via ob_start + StyleFilterEvent)
+  if (window.__overlayEngine) return
+
   const RESOURCE_PAGE_MAP = {
     Condition: {
       tab: "pat",

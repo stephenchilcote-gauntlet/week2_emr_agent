@@ -705,10 +705,9 @@
       if (!event.data.type.startsWith("overlay:")) return
       // Skip our own outbound messages
       if (event.data.type === "overlay:apply" || event.data.type === "overlay:applyAll" || event.data.type === "overlay:clear") return
-      // Forward inline action messages from overlay buttons to sidebar iframe
-      if (event.data.type === "overlay:accept" || event.data.type === "overlay:reject" || event.data.type === "overlay:navigate") {
-        Dojo.sendToSidebar(event.data)
-      }
+      // overlay.js forwarding block already sends accept/reject/navigate to
+      // all iframes (including the sidebar).  Don't forward again here —
+      // doing so caused the sidebar to receive each message twice (double-nav bug).
       Dojo.log("recv", "<code>" + JSON.stringify(event.data).substring(0, 300) + "</code>")
     })
   })()

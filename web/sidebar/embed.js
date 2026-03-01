@@ -22,6 +22,11 @@
         if (!document.body) {
             return;
         }
+        // Guard against double-mount when embed.js is injected twice
+        // (ob_start + StyleFilterEvent can both pass the IIFE guard before mount runs)
+        if (document.getElementById(SIDEBAR_ID)) {
+            return;
+        }
 
         // --- Restructure DOM: wrap existing body children + sidebar in a flex row ---
         var outerShell = document.createElement('div');
