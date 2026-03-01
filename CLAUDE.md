@@ -20,8 +20,8 @@ Before pushing, always check for divergence:
 If origin/master is ahead, say so and ask the human how to proceed. Never
 cherry-pick a subset of commits off a branch with more history behind it.
 
-Never push directly to master from agent/parallel work — push to the worktree
-branch and let the human merge.
+For parallel work in worktrees, push to the worktree branch and let the human
+merge — never merge into master unilaterally from a worktree.
 
 ## Parallel work
 
