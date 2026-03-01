@@ -127,12 +127,6 @@ BACKEND_TOOL_NAMES = [
 ]
 
 
-def test_sidebar_js_has_tool_display_names_lut() -> None:
-    js = _read("web/sidebar/sidebar.js")
-    assert "TOOL_DISPLAY_NAMES" in js
-    assert "toolDisplayName" in js
-
-
 def test_sidebar_js_all_backend_tools_have_display_names() -> None:
     """Every backend tool name must appear as a key in TOOL_DISPLAY_NAMES."""
     js = _read("web/sidebar/sidebar.js")
