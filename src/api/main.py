@@ -342,6 +342,13 @@ async def approve_manifest(
     if session.manifest is None:
         raise HTTPException(status_code=400, detail="No manifest for this session")
 
+    terminal = ("completed", "failed", "rejected", "executing")
+    if session.manifest.status in terminal:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Manifest already {session.manifest.status}; cannot review again",
+        )
+
     modifications = {
         item.get("id"): item.get("proposed_value")
         for item in req.modified_items
@@ -380,10 +387,12 @@ async def approve_manifest(
 
     has_approved = any(item.status == "approved" for item in session.manifest.items)
     if has_approved:
+        session.manifest.status = "approved"
         report = await verify_manifest(session.manifest, openemr_client)
     else:
         from ..verification.checks import VerificationReport
 
+        session.manifest.status = "rejected"
         report = VerificationReport(manifest_id=session.manifest.id)
 
     session_store.save(session)
@@ -406,6 +415,13 @@ async def execute_manifest(
 
     if session.manifest is None:
         raise HTTPException(status_code=400, detail="No manifest for this session")
+
+    terminal = ("completed", "failed", "rejected", "executing")
+    if session.manifest.status in terminal:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Manifest already {session.manifest.status}; cannot execute again",
+        )
 
     lock = _session_locks.setdefault(session_id, asyncio.Lock())
     agent_loop: AgentLoop = app.state.agent_loop
