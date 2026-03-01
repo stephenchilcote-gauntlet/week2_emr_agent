@@ -187,7 +187,7 @@ class TestAgentLoopToolErrors:
 
         result = await loop._execute_tool(
             ToolCall(id="t4", name="submit_manifest", arguments={
-                "patient_id": "p1", "items": [],
+                "items": [],
             }),
             session,
         )

@@ -43,7 +43,6 @@ async def test_run_submit_manifest_does_not_break_until_text_only() -> None:
                     "tool-1",
                     "submit_manifest",
                     {
-                        "patient_id": "patient-1",
                         "items": [
                             {
                                 "id": "item-1",
@@ -62,6 +61,7 @@ async def test_run_submit_manifest_does_not_break_until_text_only() -> None:
     )
 
     session = AgentSession()
+    session.fhir_patient_id = "patient-1"
     result = await loop.run(session, "Please add diabetes to problem list")
 
     assert result.phase == "reviewing"
@@ -98,12 +98,12 @@ async def test_submit_manifest_merges_items_and_replaces_duplicate_ids() -> None
     openemr_client = AsyncMock()
     loop = _make_loop(openemr_client, [])
     session = AgentSession()
+    session.fhir_patient_id = "patient-1"
 
     first = ToolCall(
         id="tool-1",
         name="submit_manifest",
         arguments={
-            "patient_id": "patient-1",
             "items": [
                 {
                     "id": "item-1",
@@ -122,7 +122,6 @@ async def test_submit_manifest_merges_items_and_replaces_duplicate_ids() -> None
         id="tool-2",
         name="submit_manifest",
         arguments={
-            "patient_id": "patient-1",
             "items": [
                 {
                     "id": "item-1",
@@ -159,13 +158,13 @@ async def test_submit_manifest_passes_through_unknown_references() -> None:
     openemr_client = AsyncMock()
     loop = _make_loop(openemr_client, [])
     session = AgentSession()
+    session.fhir_patient_id = "patient-1"
 
     result = await loop._execute_tool(
         ToolCall(
             id="tool-3",
             name="submit_manifest",
             arguments={
-                "patient_id": "patient-1",
                 "items": [
                     {
                         "id": "item-1",
@@ -243,10 +242,10 @@ def test_build_manifest_uses_agent_supplied_item_id_for_legacy_json() -> None:
     openemr_client = AsyncMock()
     loop = _make_loop(openemr_client, [])
     session = AgentSession()
+    session.fhir_patient_id = "patient-1"
 
     manifest = loop._build_manifest(
         {
-            "patient_id": "patient-1",
             "items": [
                 {
                     "id": "agent-item-123",
@@ -351,6 +350,7 @@ def test_build_manifest_resolves_word_ids_in_dsl_refs() -> None:
     openemr_client = AsyncMock()
     loop = _make_loop(openemr_client, [])
     session = AgentSession()
+    session.fhir_patient_id = "patient-1"
 
     dsl = (
         f'<edit ref="MedicationRequest/{med_words}" '
@@ -360,7 +360,7 @@ def test_build_manifest_resolves_word_ids_in_dsl_refs() -> None:
     )
 
     manifest = loop._build_manifest(
-        {"patient_id": "patient-1", "items": dsl},
+        {"items": dsl},
         session,
     )
 
