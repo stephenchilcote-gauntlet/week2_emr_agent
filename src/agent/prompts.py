@@ -105,12 +105,26 @@ ask the clinician to open an encounter before writing the note)
 **Vital**: `bps` (systolic), `bpd` (diastolic), `pulse`, `temperature`, \
 `respiration`, `oxygen_saturation`, `weight`, `height`, `note` \
 (requires encounter context)
+**Surgery**: `title` (procedure name), `begdate` (date), `enddate` \
+(optional), `diagnosis` (optional) — same storage pattern as medications
+**Appointment**: `category` (pc_catid, required), `title` (required), \
+`duration` (in seconds, required), `reason` (visit reason, required), \
+`status` (appointment status code, required), `date` (YYYY-MM-DD, required), \
+`start_time` (HH:MM, required), `facility` (facility ID, required), \
+`billing_facility` (billing facility ID, required), `provider` (provider \
+user ID, optional). Before creating an appointment, use `openemr_api` with \
+endpoint `list/apptcat` to look up appointment category IDs and `facility` \
+to look up facility IDs.
+**Referral**: `referral_date` (required), `body` (reason/notes, required, \
+2-150 chars), `refer_by_npi` (referring provider NPI, required), \
+`refer_to_npi` (receiving provider NPI, optional), `diagnosis` (optional), \
+`risk_level` (Low/Medium/High, optional)
 
 ### Writable resource types
 
 Only the following resource types can be written via the manifest: \
 **Condition**, **MedicationRequest**, **AllergyIntolerance**, **Encounter**, \
-**SoapNote**, **Vital**. \
+**SoapNote**, **Vital**, **Surgery**, **Appointment**, **Referral**. \
 Other types (DocumentReference, CarePlan, Observation, ServiceRequest, etc.) \
 are read-only in OpenEMR and should NOT be included in manifest items. \
 For clinical notes, SOAP notes, and discharge summaries, use **SoapNote** \
@@ -123,6 +137,26 @@ The REST API manages this table directly. Note: creating a medication via \
 REST POST may leave the `uuid` field NULL, which can cause subsequent \
 list endpoint calls to fail. For deletions, instruct the clinician to \
 deactivate the entry manually in OpenEMR if the REST DELETE fails.
+
+### Useful REST API endpoints (via openemr_api tool)
+
+These endpoints are available for read-only queries using the \
+`openemr_api` tool. Pass the path as the `endpoint` parameter:
+- `patient/{pid}/appointment` — patient's appointments
+- `appointment` — all appointments (filterable)
+- `patient/{pid}/surgery` — surgical history
+- `patient/{puuid}/insurance` — patient insurance info
+- `insurance_company` — insurance company directory
+- `insurance_type` — insurance type codes
+- `drug` — drug/formulary database
+- `prescription` — prescription records
+- `patient/{pid}/transaction` — referrals/transactions
+- `patient/{puuid}/employer` — employer information
+- `facility` — facility directory
+- `practitioner` — provider directory
+- `user` — system users
+- `list/{list_name}` — lookup tables (e.g. "apptcat" for appointment \
+categories, "apptstat" for appointment statuses)
 
 ### Examples
 
@@ -185,6 +219,31 @@ Add obesity diagnosis — BMI 32
 src="Observation/hba1c" deps="dx-obesity">
 Increase metformin due to worsening glycemic control
 </edit>
+```
+
+Log a surgical history entry:
+```
+<add type="Surgery" title="Appendectomy" begdate="2020-03-15" src="Patient/1">
+Document prior appendectomy
+</add>
+```
+
+Schedule a follow-up appointment:
+```
+<add type="Appointment" category="5" title="Office Visit" duration="900" \
+reason="Diabetes follow-up" status="-" date="2024-02-15" \
+start_time="09:30" facility="3" billing_facility="3" src="Encounter/5">
+Schedule 15-minute follow-up for diabetes management
+</add>
+```
+
+Create a referral:
+```
+<add type="Referral" referral_date="2024-01-15" \
+body="Refer for cardiology eval due to new murmur" \
+refer_by_npi="1234567890" risk_level="Medium" src="Encounter/5">
+Referral to cardiology for cardiac murmur evaluation
+</add>
 ```
 
 ## Acting on Explicit Instructions
@@ -258,6 +317,10 @@ FHIR_RESOURCE_TYPES = [
     "CarePlan",
     "DocumentReference",
     "ServiceRequest",
+    "Appointment",
+    "Goal",
+    "CareTeam",
+    "Coverage",
 ]
 
 TOOL_DEFINITIONS: list[dict] = [
