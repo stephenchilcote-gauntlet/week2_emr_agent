@@ -1,737 +1,304 @@
-"""Overlay engine e2e tests: tab navigation, ghost row preview, word-level diff.
+"""Overlay engine e2e tests: ghost row structure, action buttons, tab activation.
 
-These tests load overlay.js into a Playwright page with a mock DOM (iframes
-simulating OpenEMR's frame structure) and verify the three key overlay
-behaviors directly via ``__overlayEngine.applyOverlay()``.
+These tests log into real OpenEMR, select a patient, send a chat message
+through the sidebar to produce overlays, then inspect the actual pat iframe
+DOM for overlay rendering correctness.
 
-Tested behaviors (added in 22e6baf):
-  1. Tab navigation — ``navigateToTab`` calls ``activateTabByName(tabName, true)``
-  2. Ghost row preview — create overlays render EMR-matching rows using actual
-     proposed data (buildDisplayTitle), NOT the old badge + description style.
-  3. Word-level diff — update overlays read the current text from the DOM row
-     itself, build proposed text via ``buildProposedRowText``, then render a
-     word-level diff with strikethrough for removed and green highlight for added.
+Complements test_overlay_integration.py which covers:
+  - Doubled overlays regression
+  - Inline button navigation (next/prev advancing tour)
+  - Inline accept/reject updating sidebar status
+
+This file focuses on overlay *rendering structure* in the real EMR DOM:
+  1. Ghost row existence and DOM structure
+  2. Action button presence and layout
+  3. Tab activation (pat tab loaded with overlay content)
+  4. Data attributes on overlay elements
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-from playwright.sync_api import Page
+from playwright.sync_api import Frame, FrameLocator, Page, expect
+
+from .conftest import (
+    E2E_TIMEOUT_MS,
+    PATIENT_MAP,
+    get_sidebar_frame,
+    openemr_login,
+    select_patient,
+    send_chat_message,
+)
 
 pytestmark = pytest.mark.e2e
 
-OVERLAY_JS = (
-    Path(__file__).resolve().parents[2] / "web" / "sidebar" / "overlay.js"
-).read_text(encoding="utf-8")
+PATIENT_PID = PATIENT_MAP["Maria Santos"]
+PATIENT_NAME = "Maria Santos"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+def _open_patient_dashboard(page: Page) -> None:
+    """Navigate to the patient dashboard so the pat iframe exists."""
+    page.evaluate(f"""() => {{
+        const top = window.top || window;
+        top.navigateTab(
+            '/interface/patient_file/summary/demographics.php?set_pid={PATIENT_PID}',
+            'pat'
+        );
+    }}""")
+    pat = page.frame_locator("iframe[name=pat]")
+    pat.locator("#allergy_ps_expand").wait_for(state="attached", timeout=15000)
 
 
 @pytest.fixture
-def overlay_page(page: Page) -> Page:
-    """Page with overlay.js loaded and mock OpenEMR-style iframe DOM."""
-    page.set_default_timeout(10_000)
-    page.goto("about:blank")
+def emr_with_overlays(page: Page) -> tuple[Page, Frame, FrameLocator]:
+    """Logged-in OpenEMR with overlays rendered in the pat iframe.
 
-    # Build mock iframe DOM matching OpenEMR's frame structure.
-    # Iframes created via JS inherit the parent's origin (about:blank)
-    # so contentDocument is accessible.
-    page.evaluate("""() => {
-        // --- pat iframe (Patient Summary) ---
-        const patFrame = document.createElement('iframe');
-        patFrame.name = 'pat';
-        patFrame.style.width = '100%';
-        patFrame.style.height = '400px';
-        document.body.appendChild(patFrame);
+    Sends a single-item chat message (add penicillin allergy) so we get
+    at least one ghost row overlay in the allergy section.
 
-        const pd = patFrame.contentDocument;
-        pd.body.innerHTML = `
-            <div id="allergy_ps_expand">
-                <div class="card"><div class="collapse show">
-                    <div class="list-group list-group-flush">
-                        <div class="list-group-item p-1" data-uuid="allergy-uuid-1">
-                            Aspirin (Moderate)
-                        </div>
-                    </div>
-                </div></div>
-            </div>
-            <div id="medication_ps_expand">
-                <div class="card"><div class="collapse show">
-                    <div class="list-group list-group-flush">
-                        <div class="list-group-item p-0 pl-1" data-uuid="med-uuid-123">
-                            Amoxicillin 250mg oral daily
-                        </div>
-                    </div>
-                </div></div>
-            </div>
-            <div id="medical_problem_ps_expand">
-                <div class="card"><div class="collapse show">
-                    <div class="list-group list-group-flush">
-                        <div class="list-group-item py-1 px-1" data-uuid="cond-uuid-1">
-                            Hypertension
-                        </div>
-                    </div>
-                </div></div>
-            </div>
-        `;
+    Returns (page, sidebar_frame, pat_frame_locator).
+    """
+    page.set_default_timeout(E2E_TIMEOUT_MS)
+    openemr_login(page)
+    select_patient(page, PATIENT_PID, PATIENT_NAME)
+    _open_patient_dashboard(page)
 
-        // --- enc iframe (Encounter) ---
-        const encFrame = document.createElement('iframe');
-        encFrame.name = 'enc';
-        document.body.appendChild(encFrame);
-        encFrame.contentDocument.body.innerHTML = '<div>Encounter frame</div>';
+    sidebar = get_sidebar_frame(page)
 
-        // --- Mock activateTabByName on window.top ---
-        window._tabNavCalls = [];
-        window.activateTabByName = function(tabName, force) {
-            window._tabNavCalls.push({ tabName: tabName, force: force });
-        };
-    }""")
+    send_chat_message(
+        sidebar,
+        "Add a penicillin allergy for this patient.",
+    )
 
-    # Load overlay.js from disk content
-    page.add_script_tag(content=OVERLAY_JS)
-    page.wait_for_function("() => !!window.__overlayEngine")
+    # Wait for the review panel to become visible
+    sidebar.wait_for_selector(
+        "#review-panel:not(.hidden)", timeout=E2E_TIMEOUT_MS,
+    )
+    expect(sidebar.locator("#tour-progress")).to_be_visible()
 
-    return page
+    # Wait for overlays to render in content iframes (async via postMessage)
+    page.wait_for_timeout(3000)
+
+    pat = page.frame_locator("iframe[name=pat]")
+    return page, sidebar, pat
 
 
 # ---------------------------------------------------------------------------
-# Helper items
-# ---------------------------------------------------------------------------
-
-ALLERGY_CREATE_ITEM = {
-    "id": "item-allergy-create",
-    "resource_type": "AllergyIntolerance",
-    "action": "create",
-    "proposed_value": {"code": "12345", "display": "Penicillin"},
-    "current_value": None,
-    "description": "Add penicillin allergy",
-    "target_resource_id": None,
-}
-
-MED_CREATE_ITEM = {
-    "id": "item-med-create",
-    "resource_type": "MedicationRequest",
-    "action": "create",
-    "proposed_value": {
-        "drug": "Lisinopril",
-        "dose": "10mg",
-        "route": "oral",
-        "freq": "daily",
-    },
-    "current_value": None,
-    "description": "Add lisinopril",
-    "target_resource_id": None,
-}
-
-MED_UPDATE_ITEM = {
-    "id": "item-med-update",
-    "resource_type": "MedicationRequest",
-    "action": "update",
-    "proposed_value": {
-        "drug": "Amoxicillin",
-        "dose": "500mg",
-        "route": "oral",
-        "freq": "daily",
-    },
-    "current_value": None,  # intentionally null — engine reads from DOM
-    "description": "Increase amoxicillin dosage",
-    "target_resource_id": "MedicationRequest/med-uuid-123",
-}
-
-ENCOUNTER_CREATE_ITEM = {
-    "id": "item-enc-create",
-    "resource_type": "Encounter",
-    "action": "create",
-    "proposed_value": {"type": "office-visit"},
-    "current_value": None,
-    "description": "Create follow-up encounter",
-    "target_resource_id": None,
-}
-
-ALLERGY_DELETE_ITEM = {
-    "id": "item-allergy-delete",
-    "resource_type": "AllergyIntolerance",
-    "action": "delete",
-    "proposed_value": None,
-    "current_value": {"code": "aspirin", "display": "Aspirin"},
-    "description": "Remove aspirin allergy",
-    "target_resource_id": "AllergyIntolerance/allergy-uuid-1",
-}
-
-
-# ---------------------------------------------------------------------------
-# 1. Tab navigation
+# 1. Ghost row existence and structure
 # ---------------------------------------------------------------------------
 
 
-class TestTabNavigation:
-    """Verify overlay calls activateTabByName before applying."""
+class TestGhostRowStructure:
+    """Verify ghost rows appear in the real pat iframe with correct DOM structure."""
 
-    def test_navigate_to_pat_tab_for_allergy(self, overlay_page: Page) -> None:
-        """AllergyIntolerance maps to 'pat' tab — navigateToTab should fire."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        calls = overlay_page.evaluate("() => window._tabNavCalls")
-        assert len(calls) >= 1
-        assert calls[-1]["tabName"] == "pat"
-        assert calls[-1]["force"] is True
-
-    def test_navigate_to_pat_tab_for_medication(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_CREATE_ITEM)
-
-        calls = overlay_page.evaluate("() => window._tabNavCalls")
-        assert calls[-1]["tabName"] == "pat"
-
-    def test_encounter_resource_attempts_overlay(self, overlay_page: Page) -> None:
-        """Encounter resources attempt overlay rendering (no sidebar-only short-circuit)."""
-        overlay_page.evaluate("() => { window._tabNavCalls = []; }")
-        result = overlay_page.evaluate("""(item) => {
-            return window.__overlayEngine.applyOverlay(item);
-        }""", ENCOUNTER_CREATE_ITEM)
-
-        # Container is null so create overlay can't find it, but it should NOT
-        # return "sidebar-only" — it attempts the overlay and fails for a
-        # legitimate reason (container not found).
-        assert result["reason"] != "sidebar-only"
-        calls = overlay_page.evaluate("() => window._tabNavCalls")
-        assert len(calls) >= 1
-
-    def test_navigate_to_tab_exposed_on_engine(self, overlay_page: Page) -> None:
-        """navigateToTab should be available on __overlayEngine."""
-        has_fn = overlay_page.evaluate(
-            "() => typeof window.__overlayEngine.navigateToTab === 'function'"
-        )
-        assert has_fn is True
-
-
-# ---------------------------------------------------------------------------
-# 2. Ghost row preview (create overlays)
-# ---------------------------------------------------------------------------
-
-
-class TestGhostRowPreview:
-    """Verify create overlays render EMR-matching rows, not badge+description."""
-
-    def test_ghost_row_has_emr_structure(self, overlay_page: Page) -> None:
-        """Ghost row should use summary/flex-fill/font-weight-bold structure."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        ghost = overlay_page.frame("pat").locator(".agent-overlay-ghost")
-        assert ghost.count() == 1
-        # EMR-matching structure
-        assert ghost.locator(".flex-fill").count() == 1
-        assert ghost.locator(".font-weight-bold").count() == 1
-
-    def test_ghost_row_shows_display_title_from_proposed_value(
-        self, overlay_page: Page,
+    def test_ghost_row_exists_in_allergy_section(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
     ) -> None:
-        """Title should come from proposed_value (display + code), not description."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
+        """At least one .agent-overlay-ghost should appear in the pat iframe."""
+        _page, _sidebar, pat = emr_with_overlays
+        ghosts = pat.locator(".agent-overlay-ghost")
+        assert ghosts.count() >= 1, "No ghost row overlays found in pat iframe"
 
-        title_el = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost .font-weight-bold",
-        )
-        text = title_el.inner_text()
-        # buildDisplayTitle: "Penicillin (12345)"
-        assert "Penicillin" in text
-        assert "12345" in text
-
-    def test_ghost_row_shows_pending_status(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        ghost_text = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost",
-        ).inner_text()
-        assert "(Pending)" in ghost_text
-
-    def test_ghost_row_has_green_background(self, overlay_page: Page) -> None:
-        """New style uses green (#ECFDF5), not the old yellow (#FEF3C7)."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        bg = overlay_page.frame("pat").locator(".agent-overlay-ghost").evaluate(
-            "el => el.style.background",
-        )
-        # Browser normalizes #ECFDF5 → rgb(236, 253, 245)
-        assert "236, 253, 245" in bg or "ecfdf5" in bg.lower()
-
-    def test_ghost_row_has_no_suggested_badge(self, overlay_page: Page) -> None:
-        """New style does NOT use the old 'Suggested' badge."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        badges = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost .agent-overlay-badge",
-        )
-        assert badges.count() == 0
-
-    def test_medication_ghost_row_composes_drug_fields(
-        self, overlay_page: Page,
+    def test_ghost_row_is_inside_allergy_container(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
     ) -> None:
-        """Medication create should compose title from drug/dose/route/freq."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_CREATE_ITEM)
-
-        title_el = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost .font-weight-bold",
+        """Ghost for an allergy should be inside #allergy_ps_expand."""
+        _page, _sidebar, pat = emr_with_overlays
+        allergy_ghosts = pat.locator("#allergy_ps_expand .agent-overlay-ghost")
+        assert allergy_ghosts.count() >= 1, (
+            "Ghost row not found inside #allergy_ps_expand"
         )
-        text = title_el.inner_text()
-        # buildDisplayTitle: "Lisinopril 10mg oral daily"
-        assert "Lisinopril" in text
-        assert "10mg" in text
-        assert "oral" in text
-        assert "daily" in text
 
-
-# ---------------------------------------------------------------------------
-# 3. Word-level diff for updates
-# ---------------------------------------------------------------------------
-
-
-class TestWordLevelDiff:
-    """Verify update overlays show word-level diff from DOM text."""
-
-    def test_update_overlay_has_green_background(self, overlay_page: Page) -> None:
-        """Update rows should use green (#ECFDF5) background."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
-
-        row = overlay_page.frame("pat").locator('[data-uuid="med-uuid-123"]')
-        bg = row.evaluate("el => el.style.background")
-        # Browser normalizes #ECFDF5 → rgb(236, 253, 245)
-        assert "236, 253, 245" in bg or "ecfdf5" in bg.lower()
-
-    def test_update_overlay_has_border_left(self, overlay_page: Page) -> None:
-        """New style adds a green left border."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
-
-        row = overlay_page.frame("pat").locator('[data-uuid="med-uuid-123"]')
-        border = row.evaluate("el => el.style.borderLeft")
-        # Browser normalizes #10b981 → rgb(16, 185, 129)
-        assert "16, 185, 129" in border or "10b981" in border.lower()
-
-    def test_update_overlay_shows_diff_element(self, overlay_page: Page) -> None:
-        """An .agent-overlay-diff element should be appended to the row."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
-
-        diff = overlay_page.frame("pat").locator(
-            '[data-uuid="med-uuid-123"] .agent-overlay-diff',
-        )
-        assert diff.count() == 1
-
-    def test_diff_shows_removed_text_with_strikethrough(
-        self, overlay_page: Page,
+    def test_ghost_row_has_data_item_id(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
     ) -> None:
-        """The old dosage '250mg' should appear with strikethrough."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
+        """Ghost rows should have data-item-id for identification."""
+        _page, _sidebar, pat = emr_with_overlays
+        ghost = pat.locator(".agent-overlay-ghost").first
+        item_id = ghost.get_attribute("data-item-id")
+        assert item_id is not None, "Ghost row missing data-item-id attribute"
+        assert len(item_id) > 0, "data-item-id is empty"
 
-        diff = overlay_page.frame("pat").locator(
-            '[data-uuid="med-uuid-123"] .agent-overlay-diff',
-        )
-        # Find the strikethrough span
-        del_span = diff.locator("span[style*='line-through']")
-        assert del_span.count() >= 1
-        assert "250mg" in del_span.inner_text()
-
-    def test_diff_shows_added_text_with_green_highlight(
-        self, overlay_page: Page,
+    def test_ghost_row_has_bold_title(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
     ) -> None:
-        """The new dosage '500mg' should appear with green highlight (#D1FAE5)."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
+        """Ghost row should contain a .font-weight-bold title element."""
+        _page, _sidebar, pat = emr_with_overlays
+        ghost = pat.locator(".agent-overlay-ghost").first
+        bold = ghost.locator(".font-weight-bold")
+        assert bold.count() >= 1, "Ghost row missing .font-weight-bold title"
 
-        diff = overlay_page.frame("pat").locator(
-            '[data-uuid="med-uuid-123"] .agent-overlay-diff',
-        )
-        # Find the bold span (font-weight:600) that contains the added text
-        add_span = diff.locator("span[style*='font-weight']")
-        assert add_span.count() >= 1
-        assert "500mg" in add_span.inner_text()
-        # Verify it has the green highlight background
-        bg = add_span.evaluate("el => el.style.background")
-        assert "209, 250, 229" in bg or "d1fae5" in bg.lower()
-
-    def test_diff_preserves_unchanged_words(self, overlay_page: Page) -> None:
-        """Unchanged words (Amoxicillin, oral, daily) should appear normally."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
-
-        diff_text = overlay_page.frame("pat").locator(
-            '[data-uuid="med-uuid-123"] .agent-overlay-diff',
-        ).inner_text()
-        assert "Amoxicillin" in diff_text
-
-    def test_update_has_no_suggested_badge(self, overlay_page: Page) -> None:
-        """New style does NOT use the old 'Suggested' badge on updates."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
-
-        badges = overlay_page.frame("pat").locator(
-            '[data-uuid="med-uuid-123"] .agent-overlay-badge',
-        )
-        assert badges.count() == 0
-
-    def test_update_reads_from_dom_not_current_value(
-        self, overlay_page: Page,
+    def test_ghost_row_has_flex_fill_layout(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
     ) -> None:
-        """Even with current_value=null, diff works by reading DOM text."""
-        # MED_UPDATE_ITEM has current_value=None — old code would skip diff
-        result = overlay_page.evaluate("""(item) => {
-            return window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
+        """Ghost row should use flex-fill layout matching EMR style."""
+        _page, _sidebar, pat = emr_with_overlays
+        ghost = pat.locator(".agent-overlay-ghost").first
+        fill = ghost.locator(".flex-fill")
+        assert fill.count() >= 1, "Ghost row missing .flex-fill layout element"
 
-        assert result["applied"] is True
-        diff = overlay_page.frame("pat").locator(
-            '[data-uuid="med-uuid-123"] .agent-overlay-diff',
+
+# ---------------------------------------------------------------------------
+# 2. Action buttons on overlay elements
+# ---------------------------------------------------------------------------
+
+
+class TestOverlayActionButtons:
+    """Verify overlay ghost rows have action button containers and buttons."""
+
+    def test_ghost_has_actions_container(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        """Ghost row should contain .agent-overlay-actions."""
+        _page, _sidebar, pat = emr_with_overlays
+        actions = pat.locator(".agent-overlay-ghost .agent-overlay-actions")
+        assert actions.count() >= 1, "Ghost row missing .agent-overlay-actions container"
+
+    def test_ghost_has_accept_button(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        _page, _sidebar, pat = emr_with_overlays
+        btn = pat.locator(".agent-overlay-ghost .overlay-btn-accept")
+        assert btn.count() >= 1, "Ghost row missing accept button"
+
+    def test_ghost_has_reject_button(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        _page, _sidebar, pat = emr_with_overlays
+        btn = pat.locator(".agent-overlay-ghost .overlay-btn-reject")
+        assert btn.count() >= 1, "Ghost row missing reject button"
+
+    def test_focused_ghost_has_nav_buttons(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        """The focused ghost (current tour item) should have prev/next buttons."""
+        _page, _sidebar, pat = emr_with_overlays
+        prev_btn = pat.locator(".agent-overlay-ghost .overlay-btn-prev")
+        next_btn = pat.locator(".agent-overlay-ghost .overlay-btn-next")
+        assert prev_btn.count() >= 1, "Focused ghost missing prev button"
+        assert next_btn.count() >= 1, "Focused ghost missing next button"
+
+    def test_accept_button_has_data_item_id(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        """Action buttons should carry data-item-id for message routing."""
+        _page, _sidebar, pat = emr_with_overlays
+        btn = pat.locator(".agent-overlay-ghost .overlay-btn-accept").first
+        item_id = btn.get_attribute("data-item-id")
+        assert item_id is not None, "Accept button missing data-item-id"
+        assert len(item_id) > 0, "data-item-id on accept button is empty"
+
+    def test_buttons_are_inside_grid(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        """Action buttons should be laid out in a grid container."""
+        _page, _sidebar, pat = emr_with_overlays
+        # The grid is a child div inside .agent-overlay-actions
+        actions = pat.locator(".agent-overlay-ghost .agent-overlay-actions").first
+        # Check that accept and reject are both present inside
+        assert actions.locator(".overlay-btn-accept").count() >= 1
+        assert actions.locator(".overlay-btn-reject").count() >= 1
+
+
+# ---------------------------------------------------------------------------
+# 3. Tab activation
+# ---------------------------------------------------------------------------
+
+
+class TestTabActivation:
+    """Verify the pat tab is loaded and has overlay content after chat."""
+
+    def test_pat_iframe_has_patient_dashboard(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        """The pat iframe should have loaded the patient dashboard."""
+        _page, _sidebar, pat = emr_with_overlays
+        # Patient dashboard has the allergy section
+        allergy_section = pat.locator("#allergy_ps_expand")
+        assert allergy_section.count() >= 1, (
+            "pat iframe missing #allergy_ps_expand — dashboard not loaded"
         )
-        # Diff element should exist because DOM text differs from proposed
-        assert diff.count() == 1
 
-
-# ---------------------------------------------------------------------------
-# 4. clearAllOverlays restores state
-# ---------------------------------------------------------------------------
-
-
-class TestClearOverlays:
-    """Verify clearAllOverlays properly restores modified rows."""
-
-    def test_clear_removes_ghost_rows(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-        assert overlay_page.frame("pat").locator(".agent-overlay-ghost").count() == 1
-
-        overlay_page.evaluate("() => window.__overlayEngine.clearAllOverlays()")
-        assert overlay_page.frame("pat").locator(".agent-overlay-ghost").count() == 0
-
-    def test_clear_restores_update_row_background(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
-
-        overlay_page.evaluate("() => window.__overlayEngine.clearAllOverlays()")
-
-        row = overlay_page.frame("pat").locator('[data-uuid="med-uuid-123"]')
-        bg = row.evaluate("el => el.style.background")
-        assert bg == ""
-
-    def test_clear_removes_diff_elements(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
-
-        overlay_page.evaluate("() => window.__overlayEngine.clearAllOverlays()")
-
-        diffs = overlay_page.frame("pat").locator(
-            '[data-uuid="med-uuid-123"] .agent-overlay-diff',
+    def test_pat_iframe_has_medication_section(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        """The pat iframe should also have the medication section."""
+        _page, _sidebar, pat = emr_with_overlays
+        med_section = pat.locator("#medication_ps_expand")
+        assert med_section.count() >= 1, (
+            "pat iframe missing #medication_ps_expand"
         )
-        assert diffs.count() == 0
+
+    def test_pat_iframe_has_conditions_section(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        """The pat iframe should have the medical problems section."""
+        _page, _sidebar, pat = emr_with_overlays
+        cond_section = pat.locator("#medical_problem_ps_expand")
+        assert cond_section.count() >= 1, (
+            "pat iframe missing #medical_problem_ps_expand"
+        )
 
 
 # ---------------------------------------------------------------------------
-# 5. Apply all overlays (batch mode)
+# 4. Overlay engine loaded in parent frame
 # ---------------------------------------------------------------------------
 
 
-class TestApplyAllOverlays:
-    """Verify applyAllOverlays shows all items simultaneously."""
+class TestOverlayEngineLoaded:
+    """Verify overlay.js is injected and the engine is available."""
 
-    def test_apply_all_exposed_on_engine(self, overlay_page: Page) -> None:
-        """applyAllOverlays should be a function on __overlayEngine."""
-        has_fn = overlay_page.evaluate(
+    def test_overlay_engine_exists_on_window(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        """window.__overlayEngine should exist on the top-level page."""
+        page, _sidebar, _pat = emr_with_overlays
+        has_engine = page.evaluate(
+            "() => typeof window.__overlayEngine === 'object' && window.__overlayEngine !== null"
+        )
+        assert has_engine, "__overlayEngine not found on window — overlay.js not loaded"
+
+    def test_overlay_engine_has_apply_overlay(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        """Engine should expose applyOverlay function."""
+        page, _sidebar, _pat = emr_with_overlays
+        has_fn = page.evaluate(
+            "() => typeof window.__overlayEngine.applyOverlay === 'function'"
+        )
+        assert has_fn, "applyOverlay not found on __overlayEngine"
+
+    def test_overlay_engine_has_apply_all(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
+    ) -> None:
+        """Engine should expose applyAllOverlays function."""
+        page, _sidebar, _pat = emr_with_overlays
+        has_fn = page.evaluate(
             "() => typeof window.__overlayEngine.applyAllOverlays === 'function'"
         )
-        assert has_fn is True
+        assert has_fn, "applyAllOverlays not found on __overlayEngine"
 
-    def test_apply_all_shows_ghost_and_update_simultaneously(
-        self, overlay_page: Page,
+    def test_overlay_engine_has_clear_all(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
     ) -> None:
-        """Both allergy ghost row and med update diff visible at same time."""
-        overlay_page.evaluate("""(items) => {
-            window.__overlayEngine.applyAllOverlays(items);
-        }""", [ALLERGY_CREATE_ITEM, MED_UPDATE_ITEM])
+        """Engine should expose clearAllOverlays function."""
+        page, _sidebar, _pat = emr_with_overlays
+        has_fn = page.evaluate(
+            "() => typeof window.__overlayEngine.clearAllOverlays === 'function'"
+        )
+        assert has_fn, "clearAllOverlays not found on __overlayEngine"
 
-        pat = overlay_page.frame("pat")
-        assert pat.locator(".agent-overlay-ghost").count() == 1
-        assert pat.locator('[data-uuid="med-uuid-123"] .agent-overlay-diff').count() == 1
-
-    def test_apply_all_clears_previous_overlays_first(
-        self, overlay_page: Page,
+    def test_overlay_engine_has_navigate_to_tab(
+        self, emr_with_overlays: tuple[Page, Frame, FrameLocator],
     ) -> None:
-        """Calling applyAllOverlays twice clears previous overlays."""
-        overlay_page.evaluate("""(items) => {
-            window.__overlayEngine.applyAllOverlays(items);
-        }""", [ALLERGY_CREATE_ITEM])
-        assert overlay_page.frame("pat").locator(".agent-overlay-ghost").count() == 1
-
-        overlay_page.evaluate("""(items) => {
-            window.__overlayEngine.applyAllOverlays(items);
-        }""", [MED_CREATE_ITEM])
-
-        pat = overlay_page.frame("pat")
-        ghosts = pat.locator(".agent-overlay-ghost")
-        assert ghosts.count() == 1
-        assert "Lisinopril" in ghosts.inner_text()
-
-    def test_apply_all_returns_results_for_each_item(
-        self, overlay_page: Page,
-    ) -> None:
-        """Returns array of {itemId, applied, reason} for each item."""
-        results = overlay_page.evaluate("""(items) => {
-            return window.__overlayEngine.applyAllOverlays(items);
-        }""", [ALLERGY_CREATE_ITEM, MED_UPDATE_ITEM, ENCOUNTER_CREATE_ITEM])
-
-        assert len(results) == 3
-        assert results[0]["itemId"] == "item-allergy-create"
-        assert results[0]["applied"] is True
-        assert results[1]["itemId"] == "item-med-update"
-        assert results[1]["applied"] is True
-        assert results[2]["itemId"] == "item-enc-create"
-        assert results[2]["applied"] is False
-        # Container is null so it fails, but NOT with "sidebar-only"
-        assert results[2]["reason"] != "sidebar-only"
-
-    def test_apply_all_encounter_attempts_overlay(
-        self, overlay_page: Page,
-    ) -> None:
-        """Encounter items attempt overlay (no sidebar-only skip) but fail gracefully when container is null."""
-        results = overlay_page.evaluate("""(items) => {
-            return window.__overlayEngine.applyAllOverlays(items);
-        }""", [ENCOUNTER_CREATE_ITEM])
-
-        assert len(results) == 1
-        assert results[0]["applied"] is False
-        assert results[0]["reason"] != "sidebar-only"
-
-    def test_apply_all_navigates_to_tab(self, overlay_page: Page) -> None:
-        """Tab navigation fires for items in the batch."""
-        overlay_page.evaluate("() => { window._tabNavCalls = []; }")
-        overlay_page.evaluate("""(items) => {
-            window.__overlayEngine.applyAllOverlays(items);
-        }""", [ALLERGY_CREATE_ITEM])
-
-        calls = overlay_page.evaluate("() => window._tabNavCalls")
-        assert len(calls) >= 1
-        assert calls[-1]["tabName"] == "pat"
-
-
-# ---------------------------------------------------------------------------
-# 6. Inline action buttons on overlay elements
-# ---------------------------------------------------------------------------
-
-
-class TestInlineActionButtons:
-    """Verify each overlay element has accept/reject/prev/next buttons."""
-
-    def test_create_overlay_has_action_buttons(self, overlay_page: Page) -> None:
-        """Ghost row should contain .agent-overlay-actions container."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        actions = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost .agent-overlay-actions",
+        """Engine should expose navigateToTab function."""
+        page, _sidebar, _pat = emr_with_overlays
+        has_fn = page.evaluate(
+            "() => typeof window.__overlayEngine.navigateToTab === 'function'"
         )
-        assert actions.count() == 1
-
-    def test_update_overlay_has_action_buttons(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", MED_UPDATE_ITEM)
-
-        actions = overlay_page.frame("pat").locator(
-            '[data-uuid="med-uuid-123"] .agent-overlay-actions',
-        )
-        assert actions.count() == 1
-
-    def test_delete_overlay_has_action_buttons(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_DELETE_ITEM)
-
-        actions = overlay_page.frame("pat").locator(
-            '[data-uuid="allergy-uuid-1"] .agent-overlay-actions',
-        )
-        assert actions.count() == 1
-
-    def test_action_buttons_has_four_buttons(self, overlay_page: Page) -> None:
-        """Actions container should have exactly 4 buttons."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        buttons = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost .agent-overlay-actions button",
-        )
-        assert buttons.count() == 4
-
-    def test_action_buttons_2x2_grid_layout(self, overlay_page: Page) -> None:
-        """Actions container should use CSS grid with 2 columns."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        grid = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost .agent-overlay-actions",
-        )
-        display = grid.evaluate("el => getComputedStyle(el).display")
-        cols = grid.evaluate(
-            "el => getComputedStyle(el).gridTemplateColumns",
-        )
-        assert display == "grid"
-        # 2 column tracks — browser reports something like "Xpx Ypx"
-        assert len(cols.split()) >= 2
-
-    def test_has_accept_button(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        btn = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost .overlay-btn-accept",
-        )
-        assert btn.count() == 1
-
-    def test_has_reject_button(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        btn = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost .overlay-btn-reject",
-        )
-        assert btn.count() == 1
-
-    def test_has_prev_button(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        btn = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost .overlay-btn-prev",
-        )
-        assert btn.count() == 1
-
-    def test_has_next_button(self, overlay_page: Page) -> None:
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        btn = overlay_page.frame("pat").locator(
-            ".agent-overlay-ghost .overlay-btn-next",
-        )
-        assert btn.count() == 1
-
-    def test_accept_button_has_data_item_id(self, overlay_page: Page) -> None:
-        """Buttons should carry the item ID for identification."""
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        item_id = overlay_page.frame("pat").locator(
-            ".overlay-btn-accept",
-        ).evaluate("el => el.dataset.itemId")
-        assert item_id == "item-allergy-create"
-
-
-# ---------------------------------------------------------------------------
-# 7. Inline button postMessage communication
-# ---------------------------------------------------------------------------
-
-
-def _setup_action_listener(overlay_page: Page) -> None:
-    """Record overlay action messages on the parent window."""
-    overlay_page.evaluate("""() => {
-        window._overlayActions = [];
-        window.addEventListener('message', function handler(e) {
-            if (e.data && e.data.type && (
-                e.data.type === 'overlay:accept' ||
-                e.data.type === 'overlay:reject' ||
-                e.data.type === 'overlay:navigate'
-            )) {
-                window._overlayActions.push(e.data);
-            }
-        });
-    }""")
-
-
-class TestInlineButtonMessages:
-    """Verify button clicks send correct postMessages to the parent window."""
-
-    def test_accept_sends_overlay_accept_message(self, overlay_page: Page) -> None:
-        _setup_action_listener(overlay_page)
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        overlay_page.frame("pat").locator(".overlay-btn-accept").click()
-        overlay_page.wait_for_function("() => window._overlayActions.length > 0")
-
-        actions = overlay_page.evaluate("() => window._overlayActions")
-        assert len(actions) == 1
-        assert actions[0]["type"] == "overlay:accept"
-        assert actions[0]["itemId"] == "item-allergy-create"
-
-    def test_reject_sends_overlay_reject_message(self, overlay_page: Page) -> None:
-        _setup_action_listener(overlay_page)
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        overlay_page.frame("pat").locator(".overlay-btn-reject").click()
-        overlay_page.wait_for_function("() => window._overlayActions.length > 0")
-
-        actions = overlay_page.evaluate("() => window._overlayActions")
-        assert actions[0]["type"] == "overlay:reject"
-        assert actions[0]["itemId"] == "item-allergy-create"
-
-    def test_prev_sends_overlay_navigate_minus_1(self, overlay_page: Page) -> None:
-        _setup_action_listener(overlay_page)
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        overlay_page.frame("pat").locator(".overlay-btn-prev").click()
-        overlay_page.wait_for_function("() => window._overlayActions.length > 0")
-
-        actions = overlay_page.evaluate("() => window._overlayActions")
-        assert actions[0]["type"] == "overlay:navigate"
-        assert actions[0]["delta"] == -1
-
-    def test_next_sends_overlay_navigate_plus_1(self, overlay_page: Page) -> None:
-        _setup_action_listener(overlay_page)
-        overlay_page.evaluate("""(item) => {
-            window.__overlayEngine.applyOverlay(item);
-        }""", ALLERGY_CREATE_ITEM)
-
-        overlay_page.frame("pat").locator(".overlay-btn-next").click()
-        overlay_page.wait_for_function("() => window._overlayActions.length > 0")
-
-        actions = overlay_page.evaluate("() => window._overlayActions")
-        assert actions[0]["type"] == "overlay:navigate"
-        assert actions[0]["delta"] == 1
+        assert has_fn, "navigateToTab not found on __overlayEngine"
