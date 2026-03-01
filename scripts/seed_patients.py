@@ -535,8 +535,7 @@ def seed_allergies(
     for title, allergy_type, note in allergies:
         payload = {
             "title": title,
-            "type": allergy_type,
-            "patient_note": note,
+            "comments": note,
         }
         resp = client.post(
             f"{REST_URL}/patient/{uuid}/allergy",
