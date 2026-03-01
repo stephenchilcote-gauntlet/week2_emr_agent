@@ -417,7 +417,7 @@ class TestAPIValidation:
         assert resp.status_code == 400
         assert "No manifest" in resp.json()["detail"]
 
-    def test_get_messages_wrong_user_returns_403(self):
+    def test_get_messages_wrong_user_returns_404(self):
         from fastapi.testclient import TestClient
         from src.api.main import app
 
@@ -432,7 +432,8 @@ class TestAPIValidation:
                 headers={"openemr_user_id": "intruder"},
             )
 
-        assert resp.status_code == 403
+        # API returns 404 for wrong-user (same as not-found) to avoid leaking session existence
+        assert resp.status_code == 404
 
 
 # ==================================================================

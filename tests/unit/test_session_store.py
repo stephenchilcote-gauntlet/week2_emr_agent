@@ -27,7 +27,7 @@ def test_session_store_round_trip(tmp_path: Path) -> None:
     )
 
     store.save(session)
-    loaded = store.load(session.id)
+    loaded = store.load(session.id, session.openemr_user_id)
 
     assert loaded is not None
     assert loaded.id == session.id

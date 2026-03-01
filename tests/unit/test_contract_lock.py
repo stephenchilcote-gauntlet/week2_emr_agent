@@ -49,7 +49,10 @@ def _parse_eval_manifest_types() -> set[str]:
         for item in case.get("expected", {}).get("manifest_items", []):
             rt = item.get("resource_type")
             if rt:
-                types.add(rt)
+                if isinstance(rt, list):
+                    types.update(rt)
+                else:
+                    types.add(rt)
     return types
 
 
