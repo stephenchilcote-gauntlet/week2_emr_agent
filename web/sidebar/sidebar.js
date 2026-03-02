@@ -1037,11 +1037,21 @@ class SidebarApp {
     const { pid, pname, dob } = nav
     try {
       const parent = window.parent || window
-      if (parent.left_nav && typeof parent.left_nav.setPatient === "function") {
+      // Match native OpenEMR patient selection: set RTop.location to demographics.php?set_pid=X.
+      // This updates the PHP session, renders the patient dashboard in the "pat" tab, and
+      // demographics.php itself calls parent.left_nav.setPatient() with full encounter data —
+      // identical to what the patient finder does when a user clicks a patient row.
+      if (parent.RTop !== undefined) {
+        parent.RTop.location =
+          (parent.webroot_url || "") +
+          "/interface/patient_file/summary/demographics.php?set_pid=" +
+          encodeURIComponent(pid)
+      } else if (parent.left_nav && typeof parent.left_nav.setPatient === "function") {
+        // Fallback for environments where RTop is not available (e.g. standalone dev mode).
         parent.left_nav.setPatient(pname || "", pid, pid, "", dob || "")
       }
     } catch (_e) {
-      // parent not accessible
+      // parent not accessible (cross-origin)
     }
   }
 
