@@ -140,17 +140,63 @@ def _resolve_type(raw: str) -> str:
 # -- Sanitization ----------------------------------------------------------
 
 def _sanitize_xml(text: str) -> str:
-    """Escape bare & characters that aren't valid XML entities.
+    """Escape characters that would break XML parsing.
 
-    LLMs frequently emit bare '&' in text content (e.g., "Valid & Active").
-    This causes xml.etree.ElementTree parse errors. We escape bare '&' that
-    aren't already part of &amp; &lt; &gt; &quot; &apos; &#N; or &#xN;.
+    LLMs frequently emit:
+    - Bare '&' in text/attributes (e.g., "Valid & Active")
+    - Bare '<' or '>' in attribute values (e.g., assessment="A1c > 8%")
+    - Bare '<' in text content (e.g., "Goal: A1c < 7%")
+
+    Strategy: scan character by character tracking whether we're inside a tag
+    or text content, and escape accordingly.
     """
-    return re.sub(
+    # First pass: escape bare & not already XML entities
+    text = re.sub(
         r"&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[\da-fA-F]+;)",
         "&amp;",
         text,
     )
+
+    # Second pass: escape bare < in attribute values (double-quoted)
+    # Matches ="..." and escapes < > inside that are not already entities
+    def _escape_attr(m: re.Match) -> str:
+        val = m.group(1)
+        val = val.replace("<", "&lt;").replace(">", "&gt;")
+        return f'="{val}"'
+
+    # Only escape < > inside ="..." (attribute value) — leave the = and quotes
+    text = re.sub(r'="([^"]*)"', _escape_attr, text)
+
+    # Third pass: escape bare < in text content (between closing > of one tag
+    # and opening < of the next). Track state: in_tag means we're inside a
+    # < ... > sequence where we should NOT escape anything.
+    parts: list[str] = []
+    in_tag = False
+    j = 0
+    while j < len(text):
+        c = text[j]
+        if c == "<":
+            if in_tag:
+                # < while already in a tag — malformed; escape it
+                parts.append("&lt;")
+            else:
+                # Check if this looks like a real XML tag start
+                # (letter, /, !, ?) vs bare < in text content
+                peek = text[j + 1] if j + 1 < len(text) else ""
+                if peek in ("/", "!", "?") or peek.isalpha() or peek == "_":
+                    in_tag = True
+                    parts.append(c)
+                else:
+                    # Bare < in text content
+                    parts.append("&lt;")
+        elif c == ">":
+            in_tag = False
+            parts.append(c)
+        else:
+            parts.append(c)
+        j += 1
+
+    return "".join(parts)
 
 
 # -- Parser ----------------------------------------------------------------
