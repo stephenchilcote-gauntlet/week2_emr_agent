@@ -1036,20 +1036,30 @@ class SidebarApp {
   navigateToPatient(nav) {
     const { pid, pname, dob } = nav
     try {
-      const parent = window.parent || window
-      // Match native OpenEMR patient selection: set RTop.location to demographics.php?set_pid=X.
-      // This updates the PHP session, renders the patient dashboard in the "pat" tab, and
-      // demographics.php itself calls parent.left_nav.setPatient() with full encounter data —
-      // identical to what the patient finder does when a user clicks a patient row.
-      if (parent.RTop !== undefined) {
-        parent.RTop.location =
-          (parent.webroot_url || "") +
-          "/interface/patient_file/summary/demographics.php?set_pid=" +
-          encodeURIComponent(pid)
-      } else if (parent.left_nav && typeof parent.left_nav.setPatient === "function") {
-        // Fallback for environments where RTop is not available (e.g. standalone dev mode).
-        parent.left_nav.setPatient(pname || "", pid, pid, "", dob || "")
-      }
+      const p = window.parent || window
+      const url =
+        (p.webroot_url || "") +
+        "/interface/patient_file/summary/demographics.php?set_pid=" +
+        encodeURIComponent(pid)
+
+      // Setting RTop.location calls navigateTab("pat", activateTabByName).
+      // In navigateTab's "existing tab" branch, a one('load', activate) callback is
+      // registered — it fires after demographics.php loads, re-showing "pat" after
+      // left_nav.setPatient() hides it.
+      //
+      // In navigateTab's "new tab" branch (first open, no "pat" iframe yet), activateTabByName
+      // fires immediately (synchronous) but NO load callback is registered. demographics.php
+      // then loads, window.onload calls left_nav.setPatient() → navigateTab("enc") →
+      // openExistingTab hides "pat" — and nothing re-shows it.
+      //
+      // Fix: after RTop.location = url (synchronous, iframe now exists in DOM for both cases),
+      // register our own one('load') on "pat" to re-activate it after setPatient() runs.
+      // The parent's iframe.load fires AFTER demographics.php's window.load, so "pat" ends
+      // up as the final visible tab.
+      p.RTop.location = url
+      p.$("iframe[name='pat']").one("load", function () {
+        p.activateTabByName("pat", true)
+      })
     } catch (_e) {
       // parent not accessible (cross-origin)
     }
