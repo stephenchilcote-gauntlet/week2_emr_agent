@@ -400,6 +400,26 @@ your response text (not just "submitted for review"): warning signs the \
 patient should watch for, any medication changes, and follow-up timing. \
 Keep the response concise — aim for 2-3 sentences per topic.
 
+6. **Mechanistic rationale for standard regimens**: When proposing a \
+standard evidence-based medication regimen, write a prose paragraph BEFORE \
+any summary table that explains the mechanistic WHY for each drug class. \
+Do NOT just list drug names or classes — explain the physiologic rationale. \
+For post-MI/STEMI regimens you MUST explain all four pillars: \
+(a) **Antiplatelet therapy** (aspirin + P2Y12 inhibitor such as ticagrelor): \
+aspirin irreversibly inhibits COX-1 to prevent thromboxane-mediated platelet \
+aggregation, preventing stent thrombosis and recurrent MI; dual antiplatelet \
+therapy is standard for ≥12 months post-ACS. \
+(b) **Beta-blocker** (metoprolol succinate): reduces heart rate and myocardial \
+oxygen demand via beta-1 blockade, blunts catecholamine surge, and prevents \
+adverse left ventricular remodeling — directly reduces post-MI mortality. \
+(c) **High-intensity statin** (atorvastatin 40-80mg): stabilizes vulnerable \
+atherosclerotic plaques, reduces LDL-C, and decreases vascular inflammation, \
+lowering the risk of recurrent MI and cardiovascular events. \
+(d) **ACE inhibitor or ARB** (lisinopril/losartan): blocks the renin-angiotensin \
+system to prevent left ventricular remodeling and dilation, reduces afterload, \
+and improves ejection fraction — proven to reduce mortality in post-MI patients, \
+especially with reduced EF.
+
 ## Refusal Cases (always refuse and explain why)
 
 - Bulk record deletion involving more than 2 records (high-risk data loss).
@@ -550,14 +570,31 @@ TOOL_DEFINITIONS: list[dict] = [
             "<edit> to update, <remove> to delete. Each item needs a src "
             "attribute (source FHIR reference) and a text description. "
             "See system prompt for full DSL reference and examples. "
-            "IMPORTANT: When items contain a SoapNote type, your text "
+            "IMPORTANT #1: When items contain a SoapNote type, your text "
             "response (after calling this tool) MUST include the SOAP note "
             "content in four labeled sections using these EXACT words: "
             "'Subjective:', 'Objective:', 'Assessment:', 'Plan:' — for "
             "example: 'Subjective: Patient reports increased thirst... "
             "Objective: HbA1c 8.2%, glucose 168... Assessment: Uncontrolled "
             "Type 2 Diabetes... Plan: Increase metformin...' Do NOT replace "
-            "these with a clinical summary table."
+            "these with a clinical summary table. "
+            "IMPORTANT #2: When submitting multiple medications for a "
+            "standard evidence-based regimen (e.g., post-MI, heart failure), "
+            "your response text MUST begin with a prose paragraph explaining "
+            "the mechanistic WHY for each drug class — not just drug names. "
+            "For post-MI/STEMI specifically, you MUST explain all four "
+            "pillars: (a) Aspirin + P2Y12 inhibitor (ticagrelor/clopidogrel) "
+            "inhibit platelet aggregation to prevent stent thrombosis and "
+            "recurrent MI; (b) Beta-blocker (metoprolol) reduces heart rate "
+            "and myocardial oxygen demand via beta-1 blockade, prevents "
+            "adverse left ventricular remodeling, and reduces post-MI "
+            "mortality; (c) High-intensity statin (atorvastatin 40-80mg) "
+            "stabilizes vulnerable plaques, reduces LDL-C, and decreases "
+            "vascular inflammation to prevent recurrent events; (d) ACE "
+            "inhibitor (lisinopril) or ARB (losartan) blocks renin-"
+            "angiotensin system to prevent LV remodeling and dilation, "
+            "reduces afterload, and improves long-term survival post-MI. "
+            "Write this mechanistic paragraph FIRST, then the summary table."
         ),
         "input_schema": {
             "type": "object",
