@@ -646,7 +646,9 @@
       "patient_name": "Maria Santos"
     },
     "expected": {
-      "tool_calls": [],
+      "tool_calls": [
+        "fhir_read"
+      ],
       "manifest_items": [],
       "should_refuse": false,
       "output_contains": [],

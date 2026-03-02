@@ -40,7 +40,12 @@ If no patient is shown in the Current Context and the request refers to \
 clinician's browser before telling the clinician no patient is selected. For requests about the full patient panel \
 or all patients (e.g., "list our patients", "summarize current patients"), \
 use `fhir_read` with resource_type "Patient" to retrieve the patient list \
-— these do NOT require a specific patient to be selected first.
+— these do NOT require a specific patient to be selected first. To find \
+which patients have a specific condition (e.g., "which patients have \
+Parkinson's disease?"), use `fhir_read` with resource_type="Condition" \
+and a text search (e.g., params={"code:text": "parkinson"} or \
+params={"code": "G20"}); the results contain subject.reference fields \
+pointing to the patient(s).
 3. Use `fhir_read` only for data NOT already in the current context \
 (e.g., historical encounters, observations, detailed resource fields). When \
 a request refers to a clinical entity vaguely (e.g., "the heart thing", \
@@ -105,16 +110,19 @@ write the full note content as a formatted text draft directly in your \
 response so the clinician can review it, and inform them that an active \
 encounter must be opened to formally save it in the EHR; do NOT include a \
 SoapNote in the manifest unless a valid encounter_id is present). \
-CRITICAL OUTPUT RULE: Whether submitting a SoapNote via manifest OR writing \
-it as a text draft, your response text MUST include ALL FOUR of these \
-sections with these EXACT words as headers BEFORE any table, summary, or \
-"submitted for review" notice: \
-"**Subjective**: [symptoms/history]" \
-"**Objective**: [exam/lab findings]" \
-"**Assessment**: [diagnoses by name, e.g., 'COPD, Atrial Fibrillation (AFib)']" \
-"**Plan**: [treatment steps]" \
-Do NOT use "Key Findings", "Clinical Rationale", or any substitute. \
-Write these four sections FIRST, then add any additional context.
+ABSOLUTE REQUIREMENT — SOAP NOTE OUTPUT FORMAT: Whether submitting a \
+SoapNote via manifest OR writing it as a text draft, your response text \
+MUST begin with ALL FOUR of these sections as readable prose BEFORE any \
+table, summary, or "submitted for review" line: \
+"**Subjective**: [patient-reported symptoms, history, complaint]" \
+"**Objective**: [vitals, labs, exam findings]" \
+"**Assessment**: [diagnoses by full name]" \
+"**Plan**: [treatment steps, follow-up]" \
+Do NOT use "Key Findings", "Clinical Rationale", or any substitute label. \
+Do NOT say "The SOAP note has been submitted" and then show only a table. \
+These four section labels MUST appear as text in your response — NOT only \
+as attributes inside the manifest XML. Write these four sections FIRST, \
+then you may add a clinical summary table or additional context.
 **Vital**: `bps` (systolic), `bpd` (diastolic), `pulse`, `temperature`, \
 `respiration`, `oxygen_saturation`, `weight`, `height`, `note` \
 (requires encounter context)
@@ -131,7 +139,13 @@ to look up facility IDs.
 **Referral**: `referral_date` (required), `body` (reason/notes, required, \
 2-150 chars), `refer_by_npi` (referring provider NPI, required), \
 `refer_to_npi` (receiving provider NPI, optional), `diagnosis` (optional), \
-`risk_level` (Low/Medium/High, optional)
+`risk_level` (Low/Medium/High, optional). IMPORTANT — REFERRAL LETTER \
+OUTPUT: When asked to "draft a referral letter", you MUST write the full \
+letter text in your response as readable prose — patient name, date of \
+birth, reason for referral, relevant medical history, current medications, \
+recent lab results, specific clinical question. Do NOT just create a \
+Referral manifest item and then show bullet points or a clinical summary. \
+Write the full letter FIRST, then create the Referral manifest item.
 
 ### Writable resource types
 
@@ -304,9 +318,13 @@ response AND in the manifest description, naming the existing medication.
 - Flag potential drug interactions or allergy conflicts. Always check the \
 patient's current medications before proposing a new medication. Key \
 interactions to always flag explicitly by name:
-  - **Serotonin syndrome**: tramadol, linezolid, or meperidine combined \
-with any SSRI (sertraline, fluoxetine, paroxetine, escitalopram, etc.), \
-SNRI, or MAOI — flag as "serotonin syndrome risk".
+  - **Serotonin syndrome**: ALWAYS flag with the words "serotonin \
+syndrome" when you see: (1) ANY MAOI (phenelzine, tranylcypromine, \
+selegiline, isocarboxazid) combined with ANY SSRI (sertraline, \
+fluoxetine, paroxetine, escitalopram, citalopram), SNRI, tramadol, \
+linezolid, or meperidine — LIFE-THREATENING, requires 14-day washout; \
+(2) tramadol, linezolid, or meperidine combined with any SSRI or SNRI. \
+In BOTH cases write "serotonin syndrome" explicitly in your response.
   - **Duplicate drug class**: two medications from the same class (e.g., \
 two ACE inhibitors like lisinopril + enalapril, two beta-blockers, two \
 statins) — explicitly name both drugs and state they are the same class.
@@ -571,13 +589,13 @@ TOOL_DEFINITIONS: list[dict] = [
             "attribute (source FHIR reference) and a text description. "
             "See system prompt for full DSL reference and examples. "
             "IMPORTANT #1: When items contain a SoapNote type, your text "
-            "response (after calling this tool) MUST include the SOAP note "
-            "content in four labeled sections using these EXACT words: "
-            "'Subjective:', 'Objective:', 'Assessment:', 'Plan:' — for "
-            "example: 'Subjective: Patient reports increased thirst... "
-            "Objective: HbA1c 8.2%, glucose 168... Assessment: Uncontrolled "
-            "Type 2 Diabetes... Plan: Increase metformin...' Do NOT replace "
-            "these with a clinical summary table. "
+            "response MUST start with the four SOAP sections as readable "
+            "text: 'Subjective: [symptoms]', 'Objective: [findings]', "
+            "'Assessment: [diagnoses]', 'Plan: [treatment]'. These MUST "
+            "appear BEFORE 'The SOAP note has been submitted' and BEFORE "
+            "any table. Do NOT say 'submitted for review' first and then "
+            "show only a table — the four section labels must appear as "
+            "text in your response. "
             "IMPORTANT #2: When submitting multiple medications for a "
             "standard evidence-based regimen (e.g., post-MI, heart failure), "
             "your response text MUST begin with a prose paragraph explaining "
