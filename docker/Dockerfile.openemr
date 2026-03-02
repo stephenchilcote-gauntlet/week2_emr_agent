@@ -15,6 +15,12 @@ COPY --chown=apache:apache ./web/sidebar/sidebar.js  /var/www/localhost/htdocs/o
 COPY --chown=apache:apache ./web/sidebar/sidebar.css /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/sidebar.css
 COPY --chown=apache:apache ./web/sidebar/overlay.js  /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/overlay.js
 
+# Patched Twig templates: add data-uuid to PAMI list-group-item rows so the
+# overlay engine can locate existing rows for update/delete overlays.
+COPY --chown=apache:apache ./web/templates/patient/card/allergies.html.twig         /var/www/localhost/htdocs/openemr/templates/patient/card/allergies.html.twig
+COPY --chown=apache:apache ./web/templates/patient/card/medical_problems.html.twig  /var/www/localhost/htdocs/openemr/templates/patient/card/medical_problems.html.twig
+COPY --chown=apache:apache ./web/templates/patient/card/medication.html.twig        /var/www/localhost/htdocs/openemr/templates/patient/card/medication.html.twig
+
 # Skip the git clone at startup. Create empty /openemr so the
 # EASY_DEV_MODE_NEW rsync is a harmless no-op (--ignore-existing).
 ENV EASY_DEV_MODE_NEW=yes
