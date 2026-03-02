@@ -1,14 +1,22 @@
 FROM openemr/openemr:flex
 
-# Copy pre-built OpenEMR source (stock, unmodified — no custom files in here)
-COPY --chown=apache:apache ./openemr/ /var/www/localhost/htdocs/openemr/
+# Full stock OpenEMR source (openemr_fresh/ is a clean git checkout)
+COPY --chown=apache:apache ./openemr_fresh/ /var/www/localhost/htdocs/openemr/
 
-# Copy custom module (lives in openemr-module/ so the openemr/ tree stays stock)
+# Pre-build PHP deps at image build time (startup skips composer when vendor/ exists)
+RUN cd /var/www/localhost/htdocs/openemr && \
+    composer install --no-dev --optimize-autoloader --no-interaction 2>&1 | tail -5
+
+# Pre-build CSS/JS themes at image build time (startup skips npm when public/themes/ exists)
+# node_modules is deleted after the build — not needed at runtime
+RUN cd /var/www/localhost/htdocs/openemr && \
+    npm ci && npm run build && rm -rf node_modules
+
+# Copy custom module (lives in openemr-module/ so the openemr_fresh/ tree stays stock)
 COPY --chown=apache:apache ./openemr-module/ /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/
 
 # web/sidebar/ is the single source of truth for all sidebar assets.
-# These explicit COPYs run last and unconditionally overwrite anything that
-# landed in assets/ via the two COPYs above.
+# These explicit COPYs run last and unconditionally overwrite anything above.
 COPY --chown=apache:apache ./web/sidebar/embed.js    /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/embed.js
 COPY --chown=apache:apache ./web/sidebar/index.html  /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/index.html
 COPY --chown=apache:apache ./web/sidebar/sidebar.js  /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-assistant/public/assets/sidebar.js
@@ -21,9 +29,9 @@ COPY --chown=apache:apache ./web/templates/patient/card/allergies.html.twig     
 COPY --chown=apache:apache ./web/templates/patient/card/medical_problems.html.twig  /var/www/localhost/htdocs/openemr/templates/patient/card/medical_problems.html.twig
 COPY --chown=apache:apache ./web/templates/patient/card/medication.html.twig        /var/www/localhost/htdocs/openemr/templates/patient/card/medication.html.twig
 
-# Skip the git clone at startup. Create empty /openemr so the
-# EASY_DEV_MODE_NEW rsync is a harmless no-op (--ignore-existing).
+# Skip git clone and runtime builds — everything is pre-built above
 ENV EASY_DEV_MODE_NEW=yes
+ENV FORCE_NO_BUILD_MODE=yes
 RUN mkdir -p /openemr /couchdb/data
 
 # Wrapper script that installs Let's Encrypt certs before openemr.sh runs ssl.sh

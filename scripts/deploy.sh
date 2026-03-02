@@ -113,22 +113,22 @@ RSYNC_EXCLUDES=(
 )
 
 if [ "$DEPLOY_ALL" = true ]; then
-  # Full sync includes openemr/ (2.1 GB) — only needed for sidebar/OpenEMR changes
+  # Full sync includes openemr_fresh/ (~350 MB) — only needed for OpenEMR/sidebar changes
   RSYNC_EXCLUDES+=(
-    --exclude 'openemr/.git'
-    --exclude 'openemr/tests'
-    --exclude 'openemr/.github'
-    --exclude 'openemr/ci'
-    --exclude 'openemr/Documentation'
-    --exclude 'openemr/.phpstan'
+    --exclude 'openemr_fresh/.git'
+    --exclude 'openemr_fresh/tests'
+    --exclude 'openemr_fresh/.github'
+    --exclude 'openemr_fresh/ci'
+    --exclude 'openemr_fresh/Documentation'
+    --exclude 'openemr_fresh/.phpstan'
   )
   SERVICES=""  # all services
-  echo "=== Full sync (including openemr/) to $SERVER:$REMOTE_DIR ==="
+  echo "=== Full sync (including openemr_fresh/) to $SERVER:$REMOTE_DIR ==="
 else
-  # Agent-only: skip the 2.1 GB openemr/ and openemr-module/ directories entirely
-  RSYNC_EXCLUDES+=(--exclude 'openemr/' --exclude 'openemr-module/')
+  # Agent-only: skip openemr_fresh/ and openemr-module/ entirely
+  RSYNC_EXCLUDES+=(--exclude 'openemr_fresh/' --exclude 'openemr-module/')
   SERVICES="agent"
-  echo "=== Agent-only sync (skipping openemr/) to $SERVER:$REMOTE_DIR ==="
+  echo "=== Agent-only sync (skipping openemr_fresh/) to $SERVER:$REMOTE_DIR ==="
 fi
 
 # --copy-unsafe-links: dereference only symlinks whose targets fall OUTSIDE the
