@@ -306,13 +306,19 @@ From Anthropic billing records (Feb 23 – Mar 1, 2026):
 | **Total eval development** | | **7 days** | **~7 invoices** | **~$80** |
 
 **Why so low:**
-- The agent core was already built (Feb 23); eval run wasn't resource-intensive
-- Most queries were targeted test cases against a deployed agent, not iterative training
-- LLM judge (Haiku) is cheap ($1/$5 per MTok)
-- E2E browser tests (Playwright) run locally; only test failures triggered new API calls
-- Each eval iteration hit just a few hundred tokens per case
+- The agent core was already built (Feb 23); eval development focused on test cases, not prompt reengineering
+- E2E tests run against **deployed agent on prod VPS** (via SSH tunnel), so each test case = 1 agent API call
+- 79 cases × ~$0.75/query = ~$60 for the full eval suite runs
+- LLM judge (Haiku, optional) adds ~$0.05–$0.10 per case if enabled
+- Minimal retesting: most iterations passed first-try or hit deterministic failures (no LLM loop)
 
-**Actual per-query blended cost during eval:** ~$0.40/query (cheaper than production because judges are lightweight)
+**Actual breakdown during 7-day eval sprint:**
+- Full eval suite runs (52→79 cases): ~$60
+- LLM judge integration testing (if enabled): ~$5–$10
+- API hardening test queries: ~$5–$10
+- Buffer/misc: ~$5
+
+**Per-query blended cost during eval:** ~$0.75/query (same as production because each test runs the full agent; Haiku judges optional)
 
 ### Production Trajectory
 
