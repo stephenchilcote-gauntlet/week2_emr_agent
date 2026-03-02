@@ -286,6 +286,13 @@ class SidebarApp {
         this.state.patientID = newPid
         this.state.encounterID = event.data.encounter_id || null
         this.state.patientName = event.data.pname || null
+        // Keep OPENEMR_SESSION_CONTEXT in sync so refreshContext() doesn't
+        // overwrite the live state with the stale page-load snapshot.
+        if (window.OPENEMR_SESSION_CONTEXT) {
+          window.OPENEMR_SESSION_CONTEXT.pid = newPid
+          window.OPENEMR_SESSION_CONTEXT.encounter = event.data.encounter_id || null
+          window.OPENEMR_SESSION_CONTEXT.patient_name = event.data.pname || null
+        }
         this.updateContextDisplay()
         if (newPid !== oldPid) {
           this.state.pendingManifest = null
