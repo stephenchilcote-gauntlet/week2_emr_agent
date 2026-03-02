@@ -104,7 +104,17 @@ clinical DSL. This is compact and avoids verbose FHIR JSON.
 write the full note content as a formatted text draft directly in your \
 response so the clinician can review it, and inform them that an active \
 encounter must be opened to formally save it in the EHR; do NOT include a \
-SoapNote in the manifest unless a valid encounter_id is present)
+SoapNote in the manifest unless a valid encounter_id is present). \
+CRITICAL OUTPUT RULE: Whether submitting a SoapNote via manifest OR writing \
+it as a text draft, your response text MUST include ALL FOUR of these \
+sections with these EXACT words as headers BEFORE any table, summary, or \
+"submitted for review" notice: \
+"**Subjective**: [symptoms/history]" \
+"**Objective**: [exam/lab findings]" \
+"**Assessment**: [diagnoses by name, e.g., 'COPD, Atrial Fibrillation (AFib)']" \
+"**Plan**: [treatment steps]" \
+Do NOT use "Key Findings", "Clinical Rationale", or any substitute. \
+Write these four sections FIRST, then add any additional context.
 **Vital**: `bps` (systolic), `bpd` (diastolic), `pulse`, `temperature`, \
 `respiration`, `oxygen_saturation`, `weight`, `height`, `note` \
 (requires encounter context)
@@ -346,8 +356,12 @@ recommendations, or any clinical output:
 formal clinical name AND the common vernacular in parentheses where \
 applicable. Examples: "Major Depressive Disorder (depression)", \
 "Atrial Fibrillation (AFib)", "Hypothyroidism (underactive thyroid)", \
-"Chronic Obstructive Pulmonary Disease (COPD)". This ensures the output \
-contains searchable, patient-accessible terms alongside formal nomenclature.
+"Chronic Obstructive Pulmonary Disease (COPD)". This applies especially \
+to encounter summaries, SOAP notes, and care plan summaries — when the \
+clinician asks you to address specific conditions by name, explicitly name \
+each one in your response text using the full condition name. Always refer \
+to patients by their full name (first and last) on first mention — \
+e.g., "Dorothy Hansen" not just "Dorothy".
 
 2. **Cite specific lab values explicitly — never replace with thresholds**: \
 When a lab value is the clinical trigger for a recommendation, you MUST \
@@ -373,26 +387,18 @@ nebulization (a short-acting beta-agonist bronchodilator)". For COPD \
 exacerbations in particular, always explicitly use the word 'antibiotic' \
 when prescribing antimicrobial therapy.
 
-4. **SOAP note section headers in response text**: When generating a SOAP \
-note (submitted as a SoapNote manifest item), also include the SOAP \
-structure in your response text using these EXACT section headers so the \
-clinician can preview the content: \
-"**Subjective**: [patient complaints]", \
-"**Objective**: [exam findings/labs]", \
-"**Assessment**: [clinical impression]", \
-"**Plan**: [treatment steps]". \
-Always include all four sections in the response text alongside the \
-manifest submission.
+4. **Encounter summaries must name all conditions explicitly**: When \
+asked to write an encounter summary addressing specific conditions (e.g., \
+"COPD, atrial fibrillation, and diabetes"), explicitly name EVERY condition \
+in your response text — not just in the manifest DSL. Use full names with \
+common terms: "Chronic Obstructive Pulmonary Disease (COPD)", "Atrial \
+Fibrillation (AFib)", "Type 2 Diabetes Mellitus (T2DM)".
 
-5. **Discharge instructions format**: When asked for discharge instructions, \
-always include ALL THREE of the following in your response text, using \
-these exact headers: \
-"**Warning Signs** (return to ED if): [specific symptoms with thresholds, \
-e.g., SpO2 <88%, temperature >38.5°C, worsening dyspnea]"; \
-"**Medication Instructions**: [specific drugs, doses, and changes]"; \
-"**Follow-up Plan**: [specific timeframe and provider, e.g., 'Follow up \
-with pulmonologist in 2-4 weeks']". Include these regardless of whether \
-you also submit a SoapNote manifest.
+5. **Discharge instructions must include clinical content**: When asked \
+for discharge instructions, include specific and actionable content in \
+your response text (not just "submitted for review"): warning signs the \
+patient should watch for, any medication changes, and follow-up timing. \
+Keep the response concise — aim for 2-3 sentences per topic.
 
 ## Refusal Cases (always refuse and explain why)
 
@@ -543,7 +549,15 @@ TOOL_DEFINITIONS: list[dict] = [
             "manifest DSL. Write items as XML elements: <add> to create, "
             "<edit> to update, <remove> to delete. Each item needs a src "
             "attribute (source FHIR reference) and a text description. "
-            "See system prompt for full DSL reference and examples."
+            "See system prompt for full DSL reference and examples. "
+            "IMPORTANT: When items contain a SoapNote type, your text "
+            "response (after calling this tool) MUST include the SOAP note "
+            "content in four labeled sections using these EXACT words: "
+            "'Subjective:', 'Objective:', 'Assessment:', 'Plan:' — for "
+            "example: 'Subjective: Patient reports increased thirst... "
+            "Objective: HbA1c 8.2%, glucose 168... Assessment: Uncontrolled "
+            "Type 2 Diabetes... Plan: Increase metformin...' Do NOT replace "
+            "these with a clinical summary table."
         ),
         "input_schema": {
             "type": "object",
