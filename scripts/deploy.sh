@@ -110,6 +110,7 @@ RSYNC_EXCLUDES=(
   --exclude 'htmlcov'
   --exclude '.coverage'
   --exclude '.git'
+  --exclude 'openemr_fresh/'   # local full-source clone, never upload (use openemr/ for --all)
 )
 
 if [ "$DEPLOY_ALL" = true ]; then
@@ -144,11 +145,14 @@ scp .env.prod "$SERVER:$REMOTE_DIR/.env"
 
 if [ -n "$SERVICES" ]; then
   echo "=== Building and restarting: $SERVICES ==="
-  # --no-deps: only manage the agent container; never touch openemr/mysql.
-  # Without this, docker buildx bake rebuilds ALL images (even from cache), which
-  # produces a new attestation manifest → new image hash → compose recreates openemr
-  # → 2-minute boot → every verification check fails.
-  ssh -o StrictHostKeyChecking=no "$SERVER" "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml --env-file .env up -d --build --no-deps $SERVICES"
+  # Separate build from up to guarantee that only the specified service image is
+  # rebuilt.  `up --build` passes all services to docker buildx bake which
+  # rebuilds ALL images (even from cache), producing a new attestation manifest →
+  # new image hash → compose recreates openemr on the next `up` → 2-min boot →
+  # OpenEMR crash loop if the build context is missing openemr source files.
+  # With an explicit `build <service>` first, bake only touches that one image.
+  # shellcheck disable=SC2086
+  ssh -o StrictHostKeyChecking=no "$SERVER" "cd $REMOTE_DIR && docker compose -f docker-compose.prod.yml --env-file .env build $SERVICES && docker compose -f docker-compose.prod.yml --env-file .env up -d --no-deps $SERVICES"
 
   echo "=== Waiting for agent to become healthy ==="
   AGENT_UP=false
