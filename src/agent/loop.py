@@ -374,7 +374,9 @@ class AgentLoop:
                 )
 
             elif tool_call.name == "open_patient_chart":
-                patient_uuid = tool_call.arguments["patient_uuid"]
+                patient_uuid = resolve_identifier(
+                    tool_call.arguments["patient_uuid"]
+                )
                 # Use FHIR search (not direct read) — OpenEMR returns 403
                 # on GET Patient/{uuid} but allows search by _id.
                 bundle = await self.openemr_client.fhir_read(
