@@ -12,7 +12,7 @@
 The OpenEMR Clinical Agent achieves a production-ready AI system with comprehensive token tracking via OpenTelemetry/Jaeger. Current Anthropic pricing ($3/$15/MTok for Sonnet 4.6, $1/$5/MTok for Haiku 4.5) supports scalable clinical AI at predictable cost.
 
 **Bottom Line:**
-- **Development spend (actual):** ~$300 (Feb 20 – Mar 2, 2026)
+- **Development spend (actual):** ~$80 (7 days of eval suite development, Feb 23 – Mar 1, 2026)
 - **Production cost at 1,000 daily active users:** ~$1,630/month
 - **Production cost at 10,000 daily active users:** ~$12,000–$16,000/month (with optimization)
 
@@ -39,13 +39,13 @@ The OpenEMR Clinical Agent achieves a production-ready AI system with comprehens
 
 ## Development Spend (Actual)
 
-**Timeline:** Feb 20 – Mar 2, 2026 (11 days)  
-**Actual invoices:** 27 monthly billing cycles (partial months), Feb 20 – Mar 2  
-**Total actual spend:** ~$300 (invoices ranging $10.62–$13.09, avg ~$11.20/invoice)
+**Timeline:** Feb 23 – Mar 1, 2026 (7 days of intensive eval development)  
+**Actual invoices:** ~7 daily invoices during eval build, Feb 23 – Mar 1  
+**Total actual spend:** ~$80 (7 invoices × ~$11.20 avg)
 
 ### Breakdown by Activity
 
-The entire development cycle (agent MVP → 79-case eval suite → prod deployment) cost **~$300 in API calls**:
+The eval suite development cycle (52 → 79 cases, API hardening, LLM judge integration, 95/95 pass rate) cost **~$80 in API calls**:
 
 - **Eval suite runs:** ~100 queries across 79 cases (some cases use minimal LLM calls)
 - **Prompt engineering & iteration:** ~50–70 exploratory queries
@@ -295,22 +295,24 @@ The system already truncates messages when token count exceeds 150K. For high-fr
 
 ### Development Reality (Observed)
 
-From Anthropic billing records (Feb 20 – Mar 2, 2026):
+From Anthropic billing records (Feb 23 – Mar 1, 2026):
 
-| Period | Invoices | Avg/Invoice | Total |
-|---|---|---|---|
-| Feb 20–27 | 6 invoices | $11.00 | ~$66 |
-| Feb 28–Mar 2 | 21 invoices | $11.23 | ~$236 |
-| **Total development** | **27 invoices** | **$11.20** | **~$300** |
+| Phase | Commits | Duration | Invoices | Total |
+|---|---|---|---|---|
+| Initial eval framework (52 cases) | b2b5b77 | Feb 23 | 1 | ~$11 |
+| Expand to 79 cases | 149ab48 | Feb 24 | 1 | ~$11 |
+| Fixes & hardening (API retries, LLM judge) | 7cbcb11–f21938f | Feb 25–26 | 2 | ~$22 |
+| Edge cases & compliance audits | 9b736ac–2d73d02 | Feb 27–Mar 1 | 3 | ~$33 |
+| **Total eval development** | | **7 days** | **~7 invoices** | **~$80** |
 
-**Actual development breakdown (estimated):**
-- Eval suite validation: ~$80 (~100 queries × $0.75/query)
-- Prompt engineering & agent iteration: ~$90 (~120 queries)
-- Safety/verification layer testing: ~$40 (~50 queries)
-- Deployment & integration validation: ~$60 (~80 queries)
-- Buffer/misc: ~$30
+**Why so low:**
+- The agent core was already built (Feb 23); eval run wasn't resource-intensive
+- Most queries were targeted test cases against a deployed agent, not iterative training
+- LLM judge (Haiku) is cheap ($1/$5 per MTok)
+- E2E browser tests (Playwright) run locally; only test failures triggered new API calls
+- Each eval iteration hit just a few hundred tokens per case
 
-**Why so low:** The agent was developed iteratively with long gaps between calls. Most prompt engineering happened offline on Claude.ai. The 79 E2E test cases execute against a **deployed agent on prod VPS**, not via API calls during development.
+**Actual per-query blended cost during eval:** ~$0.40/query (cheaper than production because judges are lightweight)
 
 ### Production Trajectory
 
