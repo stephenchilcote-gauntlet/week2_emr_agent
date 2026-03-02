@@ -24,6 +24,7 @@ from playwright.sync_api import Frame, FrameLocator, Page, expect
 from .conftest import (
     E2E_TIMEOUT_MS,
     PATIENT_MAP,
+    cleanup_test_allergies,
     get_sidebar_frame,
     openemr_login,
     select_patient,
@@ -63,6 +64,8 @@ def emr_with_overlays(page: Page) -> tuple[Page, Frame, FrameLocator]:
 
     Returns (page, sidebar_frame, pat_frame_locator).
     """
+    cleanup_test_allergies(PATIENT_PID, ["Penicillin"])
+
     page.set_default_timeout(E2E_TIMEOUT_MS)
     openemr_login(page)
     select_patient(page, PATIENT_PID, PATIENT_NAME)

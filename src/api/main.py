@@ -226,17 +226,21 @@ async def chat(
         )
 
     if session.page_context and session.page_context.patient_id and not session.fhir_patient_id:
-        patient_result = await app.state.openemr_client.fhir_read(
-            "Patient",
-            {"identifier": session.page_context.patient_id},
-        )
-        if patient_result.get("entry"):
-            fhir_id = patient_result["entry"][0].get("resource", {}).get("id")
-            if fhir_id:
-                session.fhir_patient_id = fhir_id
+        pid = session.page_context.patient_id
+        # Resolve PID → FHIR UUID via REST API patient list.
+        # FHIR Patient?identifier=PID doesn't work for seed patients that only
+        # have SSN identifiers (no PT/patient-type identifier), so we scan the
+        # REST patient list which always includes the uuid field.
+        patients_result = await app.state.openemr_client.api_call("patient")
+        if isinstance(patients_result, dict):
+            for patient in patients_result.get("data", []):
+                if str(patient.get("pid", "")) == str(pid):
+                    uuid = patient.get("uuid")
+                    if uuid:
+                        session.fhir_patient_id = uuid
+                    break
 
-        # Fallback: look up by patient name (for patients without a numeric identifier,
-        # e.g. those inserted directly into the DB bypassing OpenEMR's creation workflow).
+        # Fallback: look up by patient name if REST scan didn't yield a UUID.
         if not session.fhir_patient_id:
             patient_name = (
                 (session.page_context.visible_data or {}).get("patient_name") or ""

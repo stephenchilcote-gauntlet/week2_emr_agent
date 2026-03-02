@@ -20,6 +20,7 @@ from playwright.sync_api import Frame, Page, expect
 from .conftest import (
     E2E_TIMEOUT_MS,
     PATIENT_MAP,
+    cleanup_test_allergies,
     get_sidebar_frame,
     openemr_login,
     select_patient,
@@ -56,6 +57,10 @@ def review_session(page: Page) -> tuple[Page, Frame, int]:
 
     Returns (page, sidebar_frame, manifest_item_count).
     """
+    # Remove any allergies left over from previous test executions so the
+    # agent doesn't decide "allergy already exists" and skip the manifest.
+    cleanup_test_allergies(PATIENT_PID)
+
     page.set_default_timeout(E2E_TIMEOUT_MS)
     openemr_login(page)
     select_patient(page, PATIENT_PID, PATIENT_NAME)
@@ -159,9 +164,9 @@ class TestTourModeRendering:
         self, review_session: tuple[Page, Frame, int],
     ) -> None:
         _page, sidebar, _total = review_session
-        textarea = sidebar.locator(".review-card textarea")
-        expect(textarea).to_be_visible()
-        assert len(textarea.input_value().strip()) > 0
+        # Proposed value is shown as key-value rows, not a textarea
+        value_section = sidebar.locator(".review-card-value-row")
+        assert value_section.count() > 0, "No proposed value rows found in review card"
 
     def test_summary_shows_all_pending(
         self, review_session: tuple[Page, Frame, int],

@@ -880,12 +880,11 @@ class SidebarApp {
     statusBadge.textContent = item.status
     header.appendChild(statusBadge)
 
-    if (item.confidence && item.confidence !== "high") {
-      const conf = document.createElement("span")
-      conf.className = `confidence-badge confidence-${item.confidence}`
-      conf.textContent = item.confidence === "low" ? "⚠ Needs review" : "Review suggested"
-      header.appendChild(conf)
-    }
+    const confLevel = item.confidence || "high"
+    const conf = document.createElement("span")
+    conf.className = `confidence-badge confidence-${confLevel}`
+    conf.textContent = confLevel
+    header.appendChild(conf)
 
     card.appendChild(header)
 

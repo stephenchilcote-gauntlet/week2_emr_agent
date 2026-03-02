@@ -16,6 +16,8 @@ from playwright.sync_api import Frame, Page
 from .conftest import (
     E2E_TIMEOUT_MS,
     PATIENT_MAP,
+    cleanup_test_allergies,
+    cleanup_test_conditions,
     get_sidebar_frame,
     openemr_login,
     select_patient,
@@ -114,6 +116,7 @@ class TestFullRefreshFlow:
         if not _inject_sentinel(page):
             pytest.skip("Could not inject sentinel (cross-origin or iframe not loaded)")
 
+        cleanup_test_conditions(PATIENT_PID, ["E55.9"])
         send_chat_message(
             sidebar,
             "Add vitamin D deficiency to this patient's problem list (ICD-10: E55.9).",
@@ -136,6 +139,7 @@ class TestFullRefreshFlow:
         if not _inject_sentinel(page):
             pytest.skip("Could not inject sentinel (cross-origin or iframe not loaded)")
 
+        cleanup_test_allergies(PATIENT_PID, ["Penicillin"])
         send_chat_message(
             sidebar,
             "Add a penicillin allergy for this patient.",
@@ -153,6 +157,7 @@ class TestFullRefreshFlow:
         """After execution, a summary message appears in the chat area."""
         sidebar = _setup_emr_with_patient(page)
 
+        cleanup_test_conditions(PATIENT_PID, ["D50.9"])
         send_chat_message(
             sidebar,
             "Add iron deficiency anemia to this patient's problem list (ICD-10: D50.9).",

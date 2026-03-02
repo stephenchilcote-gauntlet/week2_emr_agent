@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -35,6 +37,48 @@ PATIENT_MAP: dict[str, int] = {
     "James Kowalski": 5,
     "Aisha Patel": 6,
 }
+
+# ---------------------------------------------------------------------------
+# DB helpers (SSH to prod VPS for OpenEMR DB cleanup between tests)
+# ---------------------------------------------------------------------------
+
+_E2E_SSH_HOST = os.environ.get("E2E_SSH_HOST", "root@77.42.17.207")
+_E2E_MYSQL_CONTAINER = os.environ.get("E2E_MYSQL_CONTAINER", "emr-agent-mysql-1")
+_E2E_MYSQL_PASS = os.environ.get("E2E_MYSQL_PASS", "mS6mi7EacAWCzdjzWV1dfuyNQJpuH9")
+
+
+def db_query(sql: str) -> None:
+    """Run a SQL query against the OpenEMR database (fire-and-forget)."""
+    docker_cmd = [
+        "docker", "exec", _E2E_MYSQL_CONTAINER,
+        "mysql", "-uopenemr", f"-p{_E2E_MYSQL_PASS}", "openemr", "-e", sql,
+    ]
+    if _E2E_SSH_HOST:
+        remote_cmd = " ".join(shlex.quote(c) for c in docker_cmd)
+        cmd = ["ssh", "-o", "StrictHostKeyChecking=no", _E2E_SSH_HOST, remote_cmd]
+    else:
+        cmd = docker_cmd
+    subprocess.run(cmd, capture_output=True, timeout=30)
+
+
+def cleanup_test_allergies(pid: int, titles: list[str] | None = None) -> None:
+    """Delete test-added allergies for a patient before/after tests."""
+    if titles is None:
+        titles = ["Penicillin", "Sulfonamides (Sulfa drugs)"]
+    quoted = ", ".join(f"'{t}'" for t in titles)
+    db_query(
+        f"DELETE FROM lists WHERE pid={pid} AND type='allergy' "
+        f"AND title IN ({quoted})"
+    )
+
+
+def cleanup_test_conditions(pid: int, icd_codes: list[str]) -> None:
+    """Delete test-added conditions by ICD code for a patient."""
+    quoted = ", ".join(f"'ICD10:{c}'" for c in icd_codes)
+    db_query(
+        f"DELETE FROM lists WHERE pid={pid} AND type='medical_problem' "
+        f"AND diagnosis IN ({quoted})"
+    )
 
 
 def _load_eval_dataset() -> list[dict]:
