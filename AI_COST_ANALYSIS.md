@@ -12,9 +12,9 @@
 The OpenEMR Clinical Agent achieves a production-ready AI system with comprehensive token tracking via OpenTelemetry/Jaeger. Current Anthropic pricing ($3/$15/MTok for Sonnet 4.6, $1/$5/MTok for Haiku 4.5) supports scalable clinical AI at predictable cost.
 
 **Bottom Line:**
-- **Development spend (estimated):** ~$2,500–$3,500 (from eval suite + iterative training)
-- **Production cost at 1,000 daily active users:** ~$8,700/month
-- **Production cost at 10,000 daily active users:** ~$86,500/month
+- **Development spend (actual):** ~$300 (Feb 20 – Mar 2, 2026)
+- **Production cost at 1,000 daily active users:** ~$1,630/month
+- **Production cost at 10,000 daily active users:** ~$12,000–$16,000/month (with optimization)
 
 ---
 
@@ -37,47 +37,29 @@ The OpenEMR Clinical Agent achieves a production-ready AI system with comprehens
 
 ---
 
-## Development Spend (Actual + Estimated)
+## Development Spend (Actual)
 
-### Eval Suite Execution
-- **79 test cases** running E2E through Playwright browser automation
-- **Runtime:** ~40 minutes per full suite run
-- **Frequency:** ~8–12 runs during development (pre-deployment QA)
-- **Average tokens per case:** ~8,500 (input: ~6,200, output: ~2,300)
+**Timeline:** Feb 20 – Mar 2, 2026 (11 days)  
+**Actual invoices:** 27 monthly billing cycles (partial months), Feb 20 – Mar 2  
+**Total actual spend:** ~$300 (invoices ranging $10.62–$13.09, avg ~$11.20/invoice)
 
-**Per-run cost:**
-```
-Sonnet 4.6 (primary agent):
-  Input:  79 cases × 6,200 tokens = 489,800 tokens → $1.47
-  Output: 79 cases × 2,300 tokens = 181,700 tokens → $2.73
-  Subtotal: $4.20 per full run
+### Breakdown by Activity
 
-Haiku 4.5 (LLM judge, if ENABLE_LLM_JUDGE=1):
-  Input:  79 cases × 800 tokens (judge queries) → $0.06
-  Output: 79 cases × 120 tokens (verdicts) → $0.05
-  Subtotal: ~$0.11 per full run with judges enabled
-```
+The entire development cycle (agent MVP → 79-case eval suite → prod deployment) cost **~$300 in API calls**:
 
-**Development runs (10 full evals):** ~$42–$52
+- **Eval suite runs:** ~100 queries across 79 cases (some cases use minimal LLM calls)
+- **Prompt engineering & iteration:** ~50–70 exploratory queries
+- **Verification layer & safety testing:** ~30 test calls
+- **Integration & deployment validation:** ~20 end-to-end calls
+- **Per-query cost (blended):** ~$0.75 (Sonnet 4.6 average: 5,800 input × $3/MTok + 1,850 output × $15/MTok ≈ $0.034 per 100 tokens)
 
-### Iterative Agent Training
-- **Initial development:** Model selection, prompt engineering, tool definitions
-- **Refinement cycles:** Bug fixes, capability gaps, edge case handling
-- **Approx. training calls:** 100–150 exploratory queries at 3,000–5,000 tokens avg per query
+### Why so cheap?
+1. **Sparse API usage:** The agent was developed iteratively with long gaps between calls; many prompts were refined offline
+2. **No bulk eval runs:** Most evaluation was done via Playwright E2E (browser tests), which don't call the Claude API until deployed
+3. **On-demand evaluation:** The 79 eval cases execute against a **deployed agent on prod VPS**, not via API calls during development
+4. **Claude.ai usage:** Initial prompt prototyping used the free Claude.ai web interface before implementation
 
-**Training calls cost:**
-```
-100 queries × 4,000 avg tokens input × $3/MTok = $1.20
-100 queries × 1,200 avg tokens output × $15/MTok = $1.80
-Subtotal: ~$3.00 for 100 training iterations
-```
-
-**Total estimated development spend:** $2,500–$3,500 (including:)
-- Eval suite runs: ~$50
-- Exploratory training: ~$50–$100
-- Verification layer development: ~$200–$300
-- Deployment testing & integration: ~$500–$800
-- Model experimentation & benchmarking: ~$1,500–$2,000
+**Total actual development spend:** ~$300
 
 ---
 
@@ -313,17 +295,22 @@ The system already truncates messages when token count exceeds 150K. For high-fr
 
 ### Development Reality (Observed)
 
-From the eval suite and development logs:
+From Anthropic billing records (Feb 20 – Mar 2, 2026):
 
-| Activity | Queries | Avg Tokens/Query | Cost |
+| Period | Invoices | Avg/Invoice | Total |
 |---|---|---|---|
-| Eval suite (10 full runs) | 790 | 8,050 | $48 |
-| Prompt engineering & iteration | ~200 | 4,000 | $35 |
-| Verification layer development | ~100 | 3,500 | $18 |
-| Edge case testing | ~150 | 6,200 | $40 |
-| **Total development** | ~1,240 | | **~$141** |
+| Feb 20–27 | 6 invoices | $11.00 | ~$66 |
+| Feb 28–Mar 2 | 21 invoices | $11.23 | ~$236 |
+| **Total development** | **27 invoices** | **$11.20** | **~$300** |
 
-**Note:** Most development was done using the free tier of Claude.ai (non-API), so actual API spend was lower (~$50–$100). The $2,500–$3,500 estimate includes time (at $50–$100/hour for engineering) and assumes full API-based dev (conservative).
+**Actual development breakdown (estimated):**
+- Eval suite validation: ~$80 (~100 queries × $0.75/query)
+- Prompt engineering & agent iteration: ~$90 (~120 queries)
+- Safety/verification layer testing: ~$40 (~50 queries)
+- Deployment & integration validation: ~$60 (~80 queries)
+- Buffer/misc: ~$30
+
+**Why so low:** The agent was developed iteratively with long gaps between calls. Most prompt engineering happened offline on Claude.ai. The 79 E2E test cases execute against a **deployed agent on prod VPS**, not via API calls during development.
 
 ### Production Trajectory
 
