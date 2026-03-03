@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -12,7 +12,9 @@ from src.tools.registry import (
     PageContext,
     ToolRegistry,
     register_default_tools,
+    tool_fhir_read,
     tool_get_page_context,
+    tool_openemr_api,
     tool_send_developer_feedback,
     tool_submit_manifest,
 )
@@ -256,3 +258,120 @@ class TestDefaultTools:
         result_json = await registry.execute("submit_manifest", {"manifest": manifest})
         result = json.loads(result_json)
         assert result["status"] == "manifest_pending_review"
+
+
+# ------------------------------------------------------------------
+# tool_fhir_read — _count injection
+# ------------------------------------------------------------------
+
+
+class TestToolFhirReadCountInjection:
+    @pytest.mark.asyncio
+    async def test_list_query_injects_count_1000(self):
+        """resource_type without slash injects _count=1000 into params."""
+        client = AsyncMock(spec=OpenEMRClient)
+        client.fhir_read = AsyncMock(return_value={"resourceType": "Bundle", "total": 5})
+
+        await tool_fhir_read(client, "Patient")
+
+        client.fhir_read.assert_called_once()
+        _, call_kwargs = client.fhir_read.call_args
+        passed_params = call_kwargs.get("params") or client.fhir_read.call_args.args[1]
+        assert passed_params.get("_count") == "1000"
+
+    @pytest.mark.asyncio
+    async def test_individual_read_no_count_injected(self):
+        """resource_type with slash (e.g. Patient/123) skips _count injection."""
+        client = AsyncMock(spec=OpenEMRClient)
+        client.fhir_read = AsyncMock(return_value={"resourceType": "Patient", "id": "123"})
+
+        await tool_fhir_read(client, "Patient/123")
+
+        _, call_kwargs = client.fhir_read.call_args
+        passed_params = call_kwargs.get("params")
+        # No params should be set (or params is None) for individual reads
+        assert passed_params is None
+
+    @pytest.mark.asyncio
+    async def test_existing_params_merged_with_count(self):
+        """Caller-supplied params are preserved and _count is added."""
+        client = AsyncMock(spec=OpenEMRClient)
+        client.fhir_read = AsyncMock(return_value={"resourceType": "Bundle", "total": 0})
+
+        await tool_fhir_read(client, "Condition", {"category": "problem-list-item"})
+
+        call_args = client.fhir_read.call_args
+        # params is passed as positional arg[1] or keyword
+        passed_params = (
+            call_args.kwargs.get("params")
+            if call_args.kwargs.get("params") is not None
+            else call_args.args[1] if len(call_args.args) > 1 else None
+        )
+        assert passed_params is not None
+        assert passed_params.get("_count") == "1000"
+        assert passed_params.get("category") == "problem-list-item"
+
+    @pytest.mark.asyncio
+    async def test_caller_count_not_overridden(self):
+        """If caller already provides _count, it is preserved (setdefault)."""
+        client = AsyncMock(spec=OpenEMRClient)
+        client.fhir_read = AsyncMock(return_value={"resourceType": "Bundle", "total": 0})
+
+        await tool_fhir_read(client, "Patient", {"_count": "50"})
+
+        call_args = client.fhir_read.call_args
+        passed_params = (
+            call_args.kwargs.get("params")
+            if call_args.kwargs.get("params") is not None
+            else call_args.args[1] if len(call_args.args) > 1 else None
+        )
+        assert passed_params is not None
+        assert passed_params.get("_count") == "50"  # caller value preserved
+
+
+# ------------------------------------------------------------------
+# tool_openemr_api
+# ------------------------------------------------------------------
+
+
+class TestToolOpenemrApi:
+    @pytest.mark.asyncio
+    async def test_delegates_get_to_client(self):
+        """tool_openemr_api always uses GET method."""
+        client = AsyncMock(spec=OpenEMRClient)
+        client.api_call = AsyncMock(return_value={"data": []})
+
+        result = await tool_openemr_api(client, "patient")
+
+        client.api_call.assert_called_once_with("patient", "GET")
+        assert result == {"data": []}
+
+    @pytest.mark.asyncio
+    async def test_passes_endpoint_through(self):
+        """Endpoint string is forwarded unchanged."""
+        client = AsyncMock(spec=OpenEMRClient)
+        client.api_call = AsyncMock(return_value={})
+
+        await tool_openemr_api(client, "patient/4/medical_problem")
+
+        call_args = client.api_call.call_args
+        assert call_args.args[0] == "patient/4/medical_problem"
+
+
+# ------------------------------------------------------------------
+# tool_send_developer_feedback — message field
+# ------------------------------------------------------------------
+
+
+class TestToolSendDeveloperFeedbackExtra:
+    @pytest.mark.asyncio
+    async def test_response_includes_message_field(self):
+        result = await tool_send_developer_feedback("bug", "Search fails on empty query")
+        assert "message" in result
+        assert len(result["message"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_response_category_echoed(self):
+        result = await tool_send_developer_feedback("improvement", "Add dark mode")
+        assert result["category"] == "improvement"
+        assert result["status"] == "feedback_submitted"

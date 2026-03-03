@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from src.agent.dsl import DslItem, parse_manifest_dsl, _TYPE_ALIASES
+from src.agent.dsl import (
+    DslItem,
+    _TYPE_ALIASES,
+    _resolve_type,
+    _sanitize_xml,
+    parse_manifest_dsl,
+)
 
 
 class TestSingleAdd:
@@ -301,3 +307,118 @@ class TestDslItemDataclass:
         assert item.depends_on == []
         assert item.ref is None
         assert item.attrs == {}
+
+
+# ---------------------------------------------------------------------------
+# _resolve_type — direct tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveType:
+    def test_known_alias_lowercase(self):
+        assert _resolve_type("condition") == "Condition"
+
+    def test_known_alias_uppercase_input(self):
+        """_resolve_type lowercases the input before lookup."""
+        assert _resolve_type("CONDITION") == "Condition"
+
+    def test_soapnote_alias(self):
+        assert _resolve_type("soap") == "SoapNote"
+        assert _resolve_type("note") == "SoapNote"
+        assert _resolve_type("soapnote") == "SoapNote"
+
+    def test_surgery_aliases(self):
+        assert _resolve_type("surgery") == "Surgery"
+        assert _resolve_type("surg") == "Surgery"
+
+    def test_referral_aliases(self):
+        assert _resolve_type("referral") == "Referral"
+        assert _resolve_type("transaction") == "Referral"
+
+    def test_vital_aliases(self):
+        assert _resolve_type("vital") == "Vital"
+        assert _resolve_type("vitals") == "Vital"
+        assert _resolve_type("vitalsigns") == "Vital"
+
+    def test_unknown_type_returned_unchanged(self):
+        """Unknown type string is returned as-is (no lowercasing)."""
+        assert _resolve_type("UnknownType") == "UnknownType"
+
+    def test_appointment_aliases(self):
+        assert _resolve_type("appt") == "Appointment"
+        assert _resolve_type("scheduling") == "Appointment"
+
+    def test_immunization_aliases(self):
+        assert _resolve_type("imm") == "Immunization"
+        assert _resolve_type("immunization") == "Immunization"
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_xml — direct tests
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeXml:
+    def test_bare_ampersand_in_text(self):
+        raw = '<add src="X">salt & pepper</add>'
+        result = _sanitize_xml(raw)
+        assert "&amp;" in result
+        assert " & " not in result
+
+    def test_already_escaped_amp_not_double_escaped(self):
+        """&amp; in input must NOT become &amp;amp;."""
+        raw = '<add src="X">salt &amp; pepper</add>'
+        result = _sanitize_xml(raw)
+        assert "&amp;amp;" not in result
+
+    def test_lt_in_attribute_value_escaped(self):
+        """< in an attribute value like assessment="A1c < 7%" is escaped."""
+        raw = '<add type="Condition" note="A1c < 7%" src="X">Desc</add>'
+        result = _sanitize_xml(raw)
+        # The note attribute should now have &lt; not bare <
+        import re
+        # Find the note= attribute value
+        m = re.search(r'note="([^"]*)"', result)
+        assert m is not None
+        assert "&lt;" in m.group(1)
+
+    def test_gt_in_attribute_value_escaped(self):
+        """< in an attribute value like threshold="A1c > 8%" is escaped."""
+        raw = '<add type="Condition" note="A1c > 8%" src="X">Desc</add>'
+        result = _sanitize_xml(raw)
+        import re
+        m = re.search(r'note="([^"]*)"', result)
+        assert m is not None
+        assert "&gt;" in m.group(1)
+
+    def test_bare_lt_in_text_content_escaped(self):
+        """< in text content (not inside a tag) is escaped."""
+        raw = '<add src="X">Goal: A1c < 7%</add>'
+        result = _sanitize_xml(raw)
+        # The text "Goal: A1c < 7%" should have < escaped
+        assert "A1c &lt; 7%" in result
+
+    def test_empty_string_returns_empty(self):
+        assert _sanitize_xml("") == ""
+
+    def test_valid_xml_unchanged(self):
+        """Proper XML with no bare special chars passes through cleanly."""
+        raw = '<add type="Condition" src="Encounter/1">All good</add>'
+        result = _sanitize_xml(raw)
+        # No escaping needed; structure unchanged
+        assert 'type="Condition"' in result
+        assert ">All good<" in result
+
+    def test_unicode_content_passes_through(self):
+        """Unicode characters in text/attrs are not mangled."""
+        raw = '<add src="X">Café résumé naïve</add>'
+        result = _sanitize_xml(raw)
+        assert "Café résumé naïve" in result
+
+    def test_existing_entities_preserved(self):
+        """&lt; and &gt; entities in input are not double-escaped."""
+        raw = '<add src="X">A &lt; B</add>'
+        result = _sanitize_xml(raw)
+        # Should stay as &lt;, not become &amp;lt;
+        assert "&amp;lt;" not in result
+        assert "&lt;" in result
