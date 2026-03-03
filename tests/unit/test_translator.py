@@ -4,6 +4,9 @@ import pytest
 
 from src.agent.dsl import DslItem
 from src.agent.translator import (
+    _as_date,
+    _as_datetime,
+    _date_or_none,
     can_rest_write,
     dsl_item_to_proposed_value,
     get_rest_endpoint,
@@ -436,3 +439,199 @@ class TestEncounterScopedEndpoints:
         item = _make_item(resource_type="Vital")
         with pytest.raises(ValueError, match="requires an encounter_id"):
             get_rest_endpoint(item, PATIENT_UUID)
+
+
+# ---- Date helper functions ----
+
+
+class TestDateHelpers:
+    def test_date_or_none_truthy_string(self) -> None:
+        assert _date_or_none("2024-01-15") == "2024-01-15"
+
+    def test_date_or_none_empty_string_returns_none(self) -> None:
+        assert _date_or_none("") is None
+
+    def test_date_or_none_none_input(self) -> None:
+        assert _date_or_none(None) is None
+
+    def test_as_date_strips_time_component(self) -> None:
+        assert _as_date("2024-01-15 00:00:00") == "2024-01-15"
+
+    def test_as_date_date_only_passthrough(self) -> None:
+        assert _as_date("2024-01-15") == "2024-01-15"
+
+    def test_as_date_none_input(self) -> None:
+        assert _as_date(None) is None
+
+    def test_as_date_empty_string_returns_none(self) -> None:
+        assert _as_date("") is None
+
+    def test_as_date_iso_datetime_with_t(self) -> None:
+        assert _as_date("2024-01-15T12:30:00") == "2024-01-15"
+
+    def test_as_datetime_date_only_adds_time(self) -> None:
+        assert _as_datetime("2024-01-15") == "2024-01-15 00:00:00"
+
+    def test_as_datetime_full_datetime_passthrough(self) -> None:
+        assert _as_datetime("2024-01-15 12:30:00") == "2024-01-15 12:30:00"
+
+    def test_as_datetime_iso_format(self) -> None:
+        assert _as_datetime("2024-01-15T12:30:00") == "2024-01-15 12:30:00"
+
+    def test_as_datetime_none_input(self) -> None:
+        assert _as_datetime(None) is None
+
+    def test_as_datetime_empty_string_returns_none(self) -> None:
+        assert _as_datetime("") is None
+
+
+# ---- Surgery ----
+
+
+class TestSurgeryRest:
+    def test_basic_surgery(self) -> None:
+        item = _make_item(
+            resource_type="Surgery",
+            attrs={"title": "Appendectomy", "begdate": "2024-01-15"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["title"] == "Appendectomy"
+        assert result["begdate"] == "2024-01-15 00:00:00"
+
+    def test_surgery_defaults_begdate_to_today_on_add(self) -> None:
+        item = _make_item(resource_type="Surgery", attrs={"title": "Knee Replacement"})
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["begdate"] is not None
+        # Should be today's date with time component
+        assert result["begdate"].endswith(" 00:00:00")
+
+    def test_surgery_display_fallback(self) -> None:
+        item = _make_item(
+            resource_type="Surgery",
+            attrs={"display": "Cholecystectomy"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["title"] == "Cholecystectomy"
+
+    def test_surgery_uses_pid(self) -> None:
+        assert uses_pid("Surgery") is True
+
+    def test_surgery_endpoint(self) -> None:
+        item = _make_item(resource_type="Surgery")
+        endpoint = get_rest_endpoint(item, PATIENT_UUID)
+        assert "surgery" in endpoint.lower()
+
+
+# ---- Appointment ----
+
+
+class TestAppointmentRest:
+    def test_basic_appointment(self) -> None:
+        item = _make_item(
+            resource_type="Appointment",
+            attrs={"title": "Follow-up", "date": "2024-03-15", "category": "1"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["pc_title"] == "Follow-up"
+        assert result["pc_eventDate"] == "2024-03-15"
+        assert result["pc_catid"] == "1"
+
+    def test_appointment_pc_prefix_aliases(self) -> None:
+        """DSL uses canonical names; translator maps them to pc_ prefixed API fields."""
+        item = _make_item(
+            resource_type="Appointment",
+            attrs={"reason": "Diabetes follow-up", "start_time": "09:00:00"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["pc_hometext"] == "Diabetes follow-up"
+        assert result["pc_startTime"] == "09:00:00"
+
+    def test_appointment_omits_missing_fields(self) -> None:
+        item = _make_item(resource_type="Appointment", attrs={})
+        result = to_openemr_rest(item, PATIENT_UUID)
+        # No title, date, etc. — they should be absent (not present as None)
+        assert "pc_eventDate" not in result
+        assert "pc_title" not in result
+
+    def test_appointment_uses_pid(self) -> None:
+        assert uses_pid("Appointment") is True
+
+    def test_appointment_endpoint(self) -> None:
+        item = _make_item(resource_type="Appointment")
+        endpoint = get_rest_endpoint(item, PATIENT_UUID)
+        assert "appointment" in endpoint.lower()
+
+
+# ---- Referral ----
+
+
+class TestReferralRest:
+    def test_basic_referral(self) -> None:
+        item = _make_item(
+            resource_type="Referral",
+            attrs={
+                "referral_date": "2024-03-15",
+                "body": "Referral to cardiology",
+                "refer_to_npi": "1234567890",
+            },
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["type"] == "LBTref"
+        assert result["groupname"] == "Default"
+        assert result["referralDate"] == "2024-03-15"
+        assert result["body"] == "Referral to cardiology"
+        assert result["referToNpi"] == "1234567890"
+
+    def test_referral_omits_missing_optional_fields(self) -> None:
+        item = _make_item(resource_type="Referral", attrs={})
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["type"] == "LBTref"
+        assert "referralDate" not in result
+        assert "body" not in result
+
+    def test_referral_refer_by_npi_mapped(self) -> None:
+        item = _make_item(
+            resource_type="Referral",
+            attrs={"refer_by_npi": "0987654321"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["referByNpi"] == "0987654321"
+
+    def test_referral_diagnosis_mapped(self) -> None:
+        item = _make_item(
+            resource_type="Referral",
+            attrs={"diagnosis": "E11.9"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["referDiagnosis"] == "E11.9"
+
+    def test_referral_uses_pid(self) -> None:
+        assert uses_pid("Referral") is True
+
+    def test_referral_endpoint(self) -> None:
+        item = _make_item(resource_type="Referral")
+        endpoint = get_rest_endpoint(item, PATIENT_UUID)
+        assert "transaction" in endpoint.lower() or "referral" in endpoint.lower()
+
+
+# ---- Resource type helpers ----
+
+
+class TestResourceTypeHelpers:
+    def test_surgery_can_rest_write(self) -> None:
+        assert can_rest_write("Surgery") is True
+
+    def test_appointment_can_rest_write(self) -> None:
+        assert can_rest_write("Appointment") is True
+
+    def test_referral_can_rest_write(self) -> None:
+        assert can_rest_write("Referral") is True
+
+    def test_surgery_not_encounter_scoped(self) -> None:
+        assert needs_encounter("Surgery") is False
+
+    def test_appointment_not_encounter_scoped(self) -> None:
+        assert needs_encounter("Appointment") is False
+
+    def test_referral_not_encounter_scoped(self) -> None:
+        assert needs_encounter("Referral") is False
