@@ -422,3 +422,51 @@ class TestSanitizeXml:
         # Should stay as &lt;, not become &amp;lt;
         assert "&amp;lt;" not in result
         assert "&lt;" in result
+
+    def test_quot_entity_not_double_escaped(self):
+        """&quot; is a valid XML entity and must NOT become &amp;quot;."""
+        raw = '<add src="X">She said &quot;hello&quot;</add>'
+        result = _sanitize_xml(raw)
+        assert "&amp;quot;" not in result
+        assert "&quot;" in result
+
+    def test_apos_entity_not_double_escaped(self):
+        """&apos; is a valid XML entity and must NOT become &amp;apos;."""
+        raw = "<add src=\"X\">it&apos;s fine</add>"
+        result = _sanitize_xml(raw)
+        assert "&amp;apos;" not in result
+        assert "&apos;" in result
+
+    def test_numeric_decimal_entity_not_double_escaped(self):
+        """&#123; is a valid numeric entity and must NOT become &amp;#123;."""
+        raw = '<add src="X">char &#123;</add>'
+        result = _sanitize_xml(raw)
+        assert "&amp;#123;" not in result
+        assert "&#123;" in result
+
+    def test_numeric_hex_entity_not_double_escaped(self):
+        """&#xAB; is a valid hex entity and must NOT become &amp;#xAB;."""
+        raw = '<add src="X">char &#xAB;</add>'
+        result = _sanitize_xml(raw)
+        assert "&amp;#xAB;" not in result
+        assert "&#xAB;" in result
+
+    def test_lt_while_already_in_tag_is_escaped(self):
+        """A bare < that appears while we're already parsing a tag gets escaped."""
+        # Input: <add< src="X">text</add>
+        # After first pass (& escaping) — unchanged.
+        # Third pass: first < → in_tag=True; second < while in_tag → &lt;
+        raw = '<add< src="X">text</add>'
+        result = _sanitize_xml(raw)
+        # The result should have &lt; somewhere from the malformed second <
+        assert "&lt;" in result
+        # The tag still starts with <add
+        assert result.startswith("<add")
+
+    def test_bare_lt_followed_by_digit_is_escaped(self):
+        """< followed by a digit in text content is escaped (not treated as a tag)."""
+        raw = '<add src="X">value < 100 mg/dL</add>'
+        result = _sanitize_xml(raw)
+        assert "&lt;" in result
+        # The original text structure is preserved (modulo escaping)
+        assert "100 mg/dL" in result

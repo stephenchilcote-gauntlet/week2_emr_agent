@@ -65,6 +65,19 @@ class TestGetPricing:
         assert input_price == 3.0
         assert output_price == 15.0
 
+    def test_dated_suffix_8_digits_unknown_base_falls_to_default(self) -> None:
+        """8-digit suffix stripped but resulting base is not in map → default pricing."""
+        # "claude-novelmodel" is not in _MODEL_PRICING even without the date suffix
+        input_price, output_price = get_pricing("claude-novelmodel-20251001")
+        assert input_price == 3.0
+        assert output_price == 15.0
+
+    def test_no_dash_in_model_name_falls_to_default(self) -> None:
+        """A model name with no dash produces one part → dated-suffix logic skipped."""
+        input_price, output_price = get_pricing("unknownmodel")
+        assert input_price == 3.0
+        assert output_price == 15.0
+
     def test_opus_4_1_more_expensive_than_sonnet(self) -> None:
         opus_price = get_pricing("claude-opus-4-1")
         sonnet_price = get_pricing("claude-sonnet-4-6")

@@ -635,3 +635,152 @@ class TestResourceTypeHelpers:
 
     def test_referral_not_encounter_scoped(self) -> None:
         assert needs_encounter("Referral") is False
+
+
+# ---------------------------------------------------------------------------
+# Appointment — additional untested field aliases
+# ---------------------------------------------------------------------------
+
+
+class TestAppointmentFieldAliases:
+    def test_duration_mapped_to_pc_duration(self) -> None:
+        """'duration' attr maps to 'pc_duration' in the REST payload."""
+        item = _make_item(
+            resource_type="Appointment",
+            attrs={"duration": "30"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["pc_duration"] == "30"
+
+    def test_status_mapped_to_pc_apptstatus(self) -> None:
+        """'status' attr maps to 'pc_apptstatus' in the REST payload."""
+        item = _make_item(
+            resource_type="Appointment",
+            attrs={"status": "@"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["pc_apptstatus"] == "@"
+
+    def test_facility_mapped_to_pc_facility(self) -> None:
+        """'facility' attr maps to 'pc_facility' in the REST payload."""
+        item = _make_item(
+            resource_type="Appointment",
+            attrs={"facility": "3"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["pc_facility"] == "3"
+
+    def test_billing_facility_mapped_to_pc_billing_location(self) -> None:
+        """'billing_facility' attr maps to 'pc_billing_location' in the REST payload."""
+        item = _make_item(
+            resource_type="Appointment",
+            attrs={"billing_facility": "2"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["pc_billing_location"] == "2"
+
+    def test_provider_mapped_to_pc_aid(self) -> None:
+        """'provider' attr maps to 'pc_aid' in the REST payload."""
+        item = _make_item(
+            resource_type="Appointment",
+            attrs={"provider": "1"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["pc_aid"] == "1"
+
+    def test_pc_eventdate_direct_alias(self) -> None:
+        """'pc_eventDate' attr can be used directly as the event date."""
+        item = _make_item(
+            resource_type="Appointment",
+            attrs={"pc_eventDate": "2024-06-15"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["pc_eventDate"] == "2024-06-15"
+
+    def test_pc_starttime_direct_alias(self) -> None:
+        """'pc_startTime' attr can be used directly as the start time."""
+        item = _make_item(
+            resource_type="Appointment",
+            attrs={"pc_startTime": "14:00:00"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["pc_startTime"] == "14:00:00"
+
+    def test_pc_catid_direct_alias(self) -> None:
+        """'pc_catid' attr can be used directly as the category ID."""
+        item = _make_item(
+            resource_type="Appointment",
+            attrs={"pc_catid": "5"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["pc_catid"] == "5"
+
+
+# ---------------------------------------------------------------------------
+# Referral — risk_level field
+# ---------------------------------------------------------------------------
+
+
+class TestReferralRiskLevel:
+    def test_risk_level_mapped_to_risklevel(self) -> None:
+        """'risk_level' attr maps to 'riskLevel' in the REST payload."""
+        item = _make_item(
+            resource_type="Referral",
+            attrs={"risk_level": "high"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["riskLevel"] == "high"
+
+    def test_all_referral_optional_fields(self) -> None:
+        """All optional referral fields can be provided together."""
+        item = _make_item(
+            resource_type="Referral",
+            attrs={
+                "referral_date": "2024-03-15",
+                "body": "Please evaluate for cardiac workup",
+                "refer_by_npi": "0987654321",
+                "refer_to_npi": "1234567890",
+                "diagnosis": "I10",
+                "risk_level": "medium",
+            },
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["type"] == "LBTref"
+        assert result["referralDate"] == "2024-03-15"
+        assert result["referByNpi"] == "0987654321"
+        assert result["referToNpi"] == "1234567890"
+        assert result["referDiagnosis"] == "I10"
+        assert result["riskLevel"] == "medium"
+
+
+# ---------------------------------------------------------------------------
+# Medication — edit without a drug name keeps title as None
+# ---------------------------------------------------------------------------
+
+
+class TestMedicationEditWithoutDrug:
+    def test_edit_without_drug_name_title_is_none(self) -> None:
+        """Editing a medication without specifying the drug name leaves title=None."""
+        item = _make_item(
+            action="edit",
+            resource_type="MedicationRequest",
+            description="Increase dose",
+            attrs={"dose": "1000mg"},  # no "drug" field
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        # title should be None so the executor's merge preserves the existing title
+        assert result["title"] is None
+        # begdate should be None for edit without explicit begdate
+        assert result["begdate"] is None
+
+    def test_add_with_only_dose_no_drug_produces_empty_title(self) -> None:
+        """Adding with no drug name falls back to empty title (drug='')."""
+        item = _make_item(
+            action="add",
+            resource_type="MedicationRequest",
+            description="Prescription",
+            attrs={"dose": "500mg"},  # no drug name
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        # action="add" triggers the branch, so title is built from empty drug + dose
+        assert result["title"] == "500mg"
