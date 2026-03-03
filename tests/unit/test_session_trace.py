@@ -577,3 +577,209 @@ def test_load_audit_from_api_connect_error_returns_empty_list() -> None:
         result = _load_audit_from_api("http://example.com", "sess-1", "user-1")
 
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _format_header — branch without fhir_patient_id
+# ---------------------------------------------------------------------------
+
+
+def test_format_header_without_fhir_patient_id() -> None:
+    """Session without fhir_patient_id omits the FHIR Patient ID line."""
+    session = {
+        "id": "sess-no-fhir",
+        "openemr_user_id": "nurse-jane",
+        "phase": "idle",
+        "created_at": "2026-02-01T08:00:00",
+        # No fhir_patient_id key
+    }
+    md = _format_header(session)
+    assert "nurse-jane" in md
+    assert "idle" in md
+    assert "FHIR Patient ID" not in md
+
+
+def test_format_header_fhir_patient_id_empty_string_omits_line() -> None:
+    """fhir_patient_id='' is falsy, so the line should not appear."""
+    session = {
+        "id": "sess-empty",
+        "openemr_user_id": "doc-a",
+        "phase": "idle",
+        "created_at": "2026-02-01T08:00:00",
+        "fhir_patient_id": "",
+    }
+    md = _format_header(session)
+    assert "FHIR Patient ID" not in md
+
+
+def test_format_header_includes_session_id() -> None:
+    """Session ID always appears in header output."""
+    session = {
+        "id": "my-session-xyz",
+        "openemr_user_id": "doc-b",
+        "phase": "reviewing",
+        "created_at": "2026-02-01T08:00:00",
+    }
+    md = _format_header(session)
+    assert "my-session-xyz" in md
+
+
+# ---------------------------------------------------------------------------
+# _format_page_context — minimal and partial contexts
+# ---------------------------------------------------------------------------
+
+
+def test_format_page_context_patient_id_only() -> None:
+    """Context with only patient_id renders patient line, no encounter/page_type."""
+    ctx = {"patient_id": "pid-42"}
+    md = _format_page_context(ctx)
+    assert "pid-42" in md
+    assert "Encounter ID" not in md
+    assert "Page Type" not in md
+
+
+def test_format_page_context_with_page_type() -> None:
+    """page_type field is rendered when present."""
+    ctx = {"patient_id": "pid-5", "page_type": "encounter"}
+    md = _format_page_context(ctx)
+    assert "encounter" in md
+    assert "Page Type" in md
+
+
+def test_format_page_context_visible_data_with_none_value_skipped() -> None:
+    """visible_data entries with value=None are not rendered."""
+    ctx = {
+        "patient_id": "pid-7",
+        "visible_data": {"name": "John Doe", "dob": None},
+    }
+    md = _format_page_context(ctx)
+    assert "John Doe" in md
+    assert "dob" not in md
+
+
+def test_format_page_context_non_dict_visible_data_ignored() -> None:
+    """visible_data that is not a dict (e.g. list) is silently skipped."""
+    ctx = {"patient_id": "pid-8", "visible_data": ["some", "list"]}
+    md = _format_page_context(ctx)
+    assert "pid-8" in md
+    # No crash; list is not iterated as dict
+
+
+# ---------------------------------------------------------------------------
+# _format_manifest — empty items branch
+# ---------------------------------------------------------------------------
+
+
+def test_format_manifest_empty_items_shows_no_items_message() -> None:
+    """Manifest with items=[] renders 'No manifest items.' instead of table."""
+    manifest = {
+        "id": "m-empty",
+        "patient_id": "pid-1",
+        "status": "draft",
+        "items": [],
+    }
+    md = _format_manifest(manifest)
+    assert "No manifest items." in md
+    assert "| # |" not in md  # No table header
+
+
+def test_format_manifest_execution_result_truncated_at_60() -> None:
+    """execution_result longer than 60 chars is truncated with ellipsis."""
+    long_result = "x" * 80
+    manifest = {
+        "id": "m-long",
+        "patient_id": "pid-2",
+        "status": "executed",
+        "items": [
+            {
+                "id": "i-1",
+                "action": "create",
+                "resource_type": "Condition",
+                "description": "Test",
+                "status": "success",
+                "confidence": "high",
+                "execution_result": long_result,
+            }
+        ],
+    }
+    md = _format_manifest(manifest)
+    assert "…" in md
+    # truncated to 60 chars + ellipsis
+    assert long_result not in md
+
+
+def test_format_manifest_encounter_id_shown_when_present() -> None:
+    """Manifest with encounter_id renders that field."""
+    manifest = {
+        "id": "m-enc",
+        "patient_id": "pid-3",
+        "encounter_id": "enc-99",
+        "status": "draft",
+        "items": [],
+    }
+    md = _format_manifest(manifest)
+    assert "enc-99" in md
+    assert "Encounter ID" in md
+
+
+def test_format_manifest_no_encounter_id_omits_line() -> None:
+    """Manifest without encounter_id does not show that field."""
+    manifest = {
+        "id": "m-noenc",
+        "patient_id": "pid-4",
+        "status": "draft",
+        "items": [],
+    }
+    md = _format_manifest(manifest)
+    assert "Encounter ID" not in md
+
+
+# ---------------------------------------------------------------------------
+# _format_jaeger_traces — empty list and no-spans branch
+# ---------------------------------------------------------------------------
+
+
+def test_format_jaeger_traces_empty_list() -> None:
+    """Empty traces list renders '0 trace(s)' header with no trace sections."""
+    md = _format_jaeger_traces([])
+    assert "0" in md
+    assert "trace(s)" in md
+    assert "### Trace" not in md
+
+
+def test_format_jaeger_traces_trace_with_no_spans_is_skipped() -> None:
+    """A trace dict with spans=[] is skipped; no trace section rendered."""
+    trace_no_spans = {
+        "traceID": "deadbeef00000000",
+        "spans": [],
+    }
+    md = _format_jaeger_traces([trace_no_spans])
+    assert "**1**" in md  # bold count in header
+    assert "trace(s)" in md
+    assert "### Trace" not in md  # Skipped because no spans
+
+
+def test_format_jaeger_traces_mixed_skips_empty_only() -> None:
+    """Only traces with spans are rendered; empty-span trace is silently skipped."""
+    trace_with_spans = {
+        "traceID": "aaaa111100000000",
+        "spans": [
+            {
+                "spanID": "sp-1",
+                "operationName": "chat",
+                "startTime": 1706000000000000,
+                "duration": 1000000,
+                "references": [],
+                "tags": [],
+                "logs": [],
+            }
+        ],
+    }
+    trace_empty = {"traceID": "bbbb222200000000", "spans": []}
+    md = _format_jaeger_traces([trace_with_spans, trace_empty])
+    assert "**2**" in md  # bold count in header
+    assert "trace(s)" in md
+    # The non-empty trace appears; the empty one is skipped
+    assert "aaaa1111" in md
+    # bbbb2222 trace section should NOT appear (it was skipped)
+    assert "bbbb2222" not in md
