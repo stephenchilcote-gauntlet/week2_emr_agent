@@ -227,3 +227,40 @@ class TestResolveReference:
 
     def test_plain_string_passthrough(self) -> None:
         assert resolve_reference("plain-reference") == "plain-reference"
+
+    def test_leading_slash_resource_type_is_empty(self) -> None:
+        """slash at index 0 gives resource_type='' and identifier=rest."""
+        result = resolve_reference(f"/{_KNOWN_UUID}")
+        # resource_type is "", identifier is the UUID → resolved UUID
+        assert result == f"/{_KNOWN_UUID}"
+
+    def test_multiple_slashes_uses_first(self) -> None:
+        """Only the first slash splits resource_type from identifier."""
+        ref = f"Patient/{_KNOWN_UUID}/extra"
+        result = resolve_reference(ref)
+        # identifier after first slash is "{_KNOWN_UUID}/extra" — not a UUID
+        # resolve_identifier of "{uuid}/extra" → not uuid, not word_id → passthrough
+        assert result.startswith("Patient/")
+
+
+# ---------------------------------------------------------------------------
+# words_to_uuid error paths
+# ---------------------------------------------------------------------------
+
+
+class TestWordsToUuidErrors:
+    def test_wrong_word_count_raises_value_error(self) -> None:
+        nine_words = " ".join(uuid_to_words(_KNOWN_UUID).split()[:9])
+        with pytest.raises(ValueError, match="Expected 10 words"):
+            words_to_uuid(nine_words)
+
+    def test_eleven_words_raises_value_error(self) -> None:
+        eleven_words = uuid_to_words(_KNOWN_UUID) + " extra"
+        with pytest.raises(ValueError, match="Expected 10 words"):
+            words_to_uuid(eleven_words)
+
+    def test_unknown_word_raises_value_error(self) -> None:
+        words_list = uuid_to_words(_KNOWN_UUID).split()
+        words_list[3] = "zzznotinwordlistxxx"
+        with pytest.raises(ValueError, match="not in wordlist"):
+            words_to_uuid(" ".join(words_list))

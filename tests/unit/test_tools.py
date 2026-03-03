@@ -375,3 +375,100 @@ class TestToolSendDeveloperFeedbackExtra:
         result = await tool_send_developer_feedback("improvement", "Add dark mode")
         assert result["category"] == "improvement"
         assert result["status"] == "feedback_submitted"
+
+
+# ------------------------------------------------------------------
+# ToolRegistry.register with None input_schema
+# ------------------------------------------------------------------
+
+
+class TestRegisterNoneInputSchema:
+    @pytest.mark.asyncio
+    async def test_register_none_schema_uses_default(self):
+        """register(input_schema=None) falls back to {type: object, properties: {}}."""
+        registry = _make_registry()
+
+        async def noop() -> dict:
+            return {"ok": True}
+
+        registry.register(name="noop", func=noop, description="No-op", input_schema=None)
+        defs = registry.get_tool_definitions()
+        assert len(defs) == 1
+        schema = defs[0]["input_schema"]
+        assert schema.get("type") == "object"
+        assert "properties" in schema
+
+    @pytest.mark.asyncio
+    async def test_register_none_schema_tool_still_executes(self):
+        """Tool registered with None schema is callable via execute."""
+        registry = _make_registry()
+
+        async def answer() -> dict:
+            return {"value": 42}
+
+        registry.register(name="answer", func=answer, description="Returns 42", input_schema=None)
+        result_json = await registry.execute("answer", {})
+        result = json.loads(result_json)
+        assert result == {"value": 42}
+
+
+# ------------------------------------------------------------------
+# tool_submit_manifest — edge cases
+# ------------------------------------------------------------------
+
+
+class TestToolSubmitManifestEdgeCases:
+    @pytest.mark.asyncio
+    async def test_empty_items_list_returns_zero_count(self):
+        """submit_manifest with items=[] returns item_count=0."""
+        registry = _make_registry()
+        result = await tool_submit_manifest(registry, {"items": []})
+        assert result["status"] == "manifest_pending_review"
+        assert result["item_count"] == 0
+        assert result["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_response_contains_items_list(self):
+        """submit_manifest response includes serialised items."""
+        registry = _make_registry()
+        manifest = {
+            "items": [
+                {
+                    "id": "i-1",
+                    "action": "create",
+                    "resource_type": "Condition",
+                    "summary": "New diagnosis",
+                }
+            ]
+        }
+        result = await tool_submit_manifest(registry, manifest)
+        assert len(result["items"]) == 1
+        item = result["items"][0]
+        assert item["id"] == "i-1"
+        assert item["action"] == "create"
+        assert item["approved"] is False  # ManifestItem default
+
+
+# ------------------------------------------------------------------
+# ManifestItem and PageContext model defaults
+# ------------------------------------------------------------------
+
+
+class TestManifestItemDefaults:
+    def test_approved_defaults_to_false(self):
+        item = ManifestItem(id="x", action="create", resource_type="Condition", summary="s")
+        assert item.approved is False
+
+    def test_payload_defaults_to_empty_dict(self):
+        item = ManifestItem(id="x", action="create", resource_type="Condition", summary="s")
+        assert item.payload == {}
+
+
+class TestPageContextExtra:
+    def test_extra_field_accepts_dict(self):
+        ctx = PageContext(page="summary", extra={"visible_data": ["E11.9"]})
+        assert ctx.extra["visible_data"] == ["E11.9"]
+
+    def test_extra_field_defaults_to_empty(self):
+        ctx = PageContext(page="summary")
+        assert ctx.extra == {}

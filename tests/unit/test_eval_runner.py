@@ -164,3 +164,63 @@ def test_eval_report_zero_total() -> None:
     )
     summary = report.summary
     assert "Total: 0" in summary
+
+
+def test_eval_report_summary_multiple_categories() -> None:
+    """Summary lists each category on its own line."""
+    report = EvalReport(
+        total=10,
+        passed=7,
+        failed=3,
+        pass_rate=0.7,
+        by_category={
+            "happy_path": {"passed": 4, "total": 5, "rate": 0.8},
+            "adversarial": {"passed": 3, "total": 5, "rate": 0.6},
+        },
+        results=[],
+        timestamp="2026-03-03T00:00:00Z",
+    )
+    summary = report.summary
+    assert "happy_path" in summary
+    assert "adversarial" in summary
+    assert "4/5" in summary
+    assert "3/5" in summary
+
+
+def test_eval_report_summary_zero_percent_rate() -> None:
+    """0% pass rate is shown as 0.0% in summary."""
+    report = EvalReport(
+        total=5,
+        passed=0,
+        failed=5,
+        pass_rate=0.0,
+        by_category={"edge_case": {"passed": 0, "total": 5, "rate": 0.0}},
+        results=[],
+        timestamp="2026-03-03T00:00:00Z",
+    )
+    assert "0.0%" in report.summary
+
+
+def test_eval_report_summary_hundred_percent_rate() -> None:
+    """100% pass rate is shown as 100.0% in summary."""
+    report = EvalReport(
+        total=3,
+        passed=3,
+        failed=0,
+        pass_rate=1.0,
+        by_category={"dsl": {"passed": 3, "total": 3, "rate": 1.0}},
+        results=[],
+        timestamp="2026-03-03T00:00:00Z",
+    )
+    assert "100.0%" in report.summary
+
+
+def test_eval_report_summary_first_line_has_timestamp() -> None:
+    """The first line of the summary includes the timestamp."""
+    ts = "2026-03-03T00:00:00Z"
+    report = EvalReport(
+        total=1, passed=1, failed=0, pass_rate=1.0,
+        by_category={}, results=[], timestamp=ts,
+    )
+    first_line = report.summary.splitlines()[0]
+    assert ts in first_line

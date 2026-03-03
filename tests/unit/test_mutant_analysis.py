@@ -650,3 +650,79 @@ def test_build_parser_accepts_mutmut_cmd() -> None:
     parser = build_parser()
     args = parser.parse_args(["--mutmut-cmd", "python -m mutmut"])
     assert "mutmut" in args.mutmut_cmd
+
+
+# ---------------------------------------------------------------------------
+# _looks_like_logic_line — additional token and operator coverage
+# ---------------------------------------------------------------------------
+
+
+def test_looks_like_logic_line_for_token() -> None:
+    """Inline 'for' expression matches ' for ' token."""
+    assert _looks_like_logic_line("[x for x in items]") is True
+
+
+def test_looks_like_logic_line_while_token() -> None:
+    """Line containing ' while ' token is logic-like."""
+    assert _looks_like_logic_line("run while active") is True
+
+
+def test_looks_like_logic_line_not_token() -> None:
+    """Line containing ' not ' token is logic-like."""
+    assert _looks_like_logic_line("value not None") is True
+
+
+def test_looks_like_logic_line_gte_operator() -> None:
+    """'>=' operator marks a line as logic-like."""
+    assert _looks_like_logic_line("x >= 0") is True
+
+
+def test_looks_like_logic_line_gt_operator() -> None:
+    """'>' operator (without 'if') marks a line as logic-like."""
+    assert _looks_like_logic_line("a > b") is True
+
+
+def test_looks_like_logic_line_lt_operator() -> None:
+    """'<' operator marks a line as logic-like."""
+    assert _looks_like_logic_line("a < b") is True
+
+
+# ---------------------------------------------------------------------------
+# _is_literal_assignment — edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_is_literal_assignment_negative_integer() -> None:
+    """Negative integer (e.g. -1) is a literal RHS."""
+    assert _is_literal_assignment("SENTINEL = -1") is True
+
+
+def test_is_literal_assignment_positive_with_plus_sign() -> None:
+    """Explicitly signed positive integer is a literal RHS."""
+    assert _is_literal_assignment("BASE = +5") is True
+
+
+def test_is_literal_assignment_tuple_rhs_not_literal() -> None:
+    """Parenthesis-start RHS is not a literal (treated like a tuple)."""
+    assert _is_literal_assignment("ARGS = (1, 2)") is False
+
+
+# ---------------------------------------------------------------------------
+# parse_mutmut_show_output — multiple removed/added lines
+# ---------------------------------------------------------------------------
+
+
+def test_parse_mutmut_show_output_multiple_removed_lines_joined() -> None:
+    """Multiple removed lines are joined with a space."""
+    output = "--- a/src/foo.py\n+++ b/src/foo.py\n@@\n-line one\n-line two\n+changed\n"
+    removed, added = parse_mutmut_show_output(output)
+    assert removed == "line one line two"
+    assert added == "changed"
+
+
+def test_parse_mutmut_show_output_multiple_added_lines_joined() -> None:
+    """Multiple added lines are joined with a space."""
+    output = "--- a/src/foo.py\n+++ b/src/foo.py\n@@\n-original\n+new one\n+new two\n"
+    removed, added = parse_mutmut_show_output(output)
+    assert removed == "original"
+    assert added == "new one new two"
