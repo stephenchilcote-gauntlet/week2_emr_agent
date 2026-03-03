@@ -726,3 +726,157 @@ def test_parse_mutmut_show_output_multiple_added_lines_joined() -> None:
     removed, added = parse_mutmut_show_output(output)
     assert removed == "original"
     assert added == "new one new two"
+
+
+# ---------------------------------------------------------------------------
+# run_cli — return code and output file
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_report() -> dict:
+    return {
+        "generated_at": "2026-03-03T00:00:00Z",
+        "cache_path": ".mutmut-cache",
+        "statuses": ["bad_survived"],
+        "total": 0,
+        "counts": {MUST_FIX: 0, NOISE: 0, MANUAL: 0},
+        "must_fix_ids": [],
+        "mutants": [],
+    }
+
+
+def test_run_cli_returns_zero_exit_code(tmp_path: Path) -> None:
+    """run_cli returns 0 on success."""
+    from unittest.mock import patch
+    from src.eval.mutant_analysis import run_cli
+
+    output_path = str(tmp_path / "report.json")
+    with patch("src.eval.mutant_analysis.MutantAnalyzer") as MockAnalyzer:
+        MockAnalyzer.return_value.analyze.return_value = _make_mock_report()
+        rc = run_cli(["--output", output_path])
+
+    assert rc == 0
+
+
+def test_run_cli_writes_json_to_output_path(tmp_path: Path) -> None:
+    """run_cli writes valid JSON to the output file."""
+    import json
+    from unittest.mock import patch
+    from src.eval.mutant_analysis import run_cli
+
+    report = _make_mock_report()
+    report["total"] = 3
+    report["must_fix_ids"] = [1, 2, 3]
+    output_path = tmp_path / "out.json"
+
+    with patch("src.eval.mutant_analysis.MutantAnalyzer") as MockAnalyzer:
+        MockAnalyzer.return_value.analyze.return_value = report
+        run_cli(["--output", str(output_path)])
+
+    assert output_path.exists()
+    data = json.loads(output_path.read_text())
+    assert data["total"] == 3
+    assert data["must_fix_ids"] == [1, 2, 3]
+
+
+def test_run_cli_applies_survived_status_alias(tmp_path: Path) -> None:
+    """run_cli maps 'survived' → 'bad_survived' before passing to analyzer."""
+    from unittest.mock import patch
+    from src.eval.mutant_analysis import run_cli
+
+    output_path = str(tmp_path / "r.json")
+    with patch("src.eval.mutant_analysis.MutantAnalyzer") as MockAnalyzer:
+        MockAnalyzer.return_value.analyze.return_value = _make_mock_report()
+        run_cli(["--output", output_path])  # default --status is survived
+
+        call_args = MockAnalyzer.return_value.analyze.call_args
+        statuses_passed = call_args[0][0]
+    assert "bad_survived" in statuses_passed
+    assert "survived" not in statuses_passed
+
+
+def test_run_cli_applies_killed_status_alias(tmp_path: Path) -> None:
+    """run_cli maps 'killed' → 'ok_killed'."""
+    from unittest.mock import patch
+    from src.eval.mutant_analysis import run_cli
+
+    output_path = str(tmp_path / "r.json")
+    with patch("src.eval.mutant_analysis.MutantAnalyzer") as MockAnalyzer:
+        MockAnalyzer.return_value.analyze.return_value = _make_mock_report()
+        run_cli(["--status", "killed", "--output", output_path])
+
+        call_args = MockAnalyzer.return_value.analyze.call_args
+        statuses_passed = call_args[0][0]
+    assert "ok_killed" in statuses_passed
+
+
+def test_run_cli_deduplicates_repeated_statuses(tmp_path: Path) -> None:
+    """Duplicate status values (after alias mapping) are deduplicated."""
+    from unittest.mock import patch
+    from src.eval.mutant_analysis import run_cli
+
+    output_path = str(tmp_path / "r.json")
+    with patch("src.eval.mutant_analysis.MutantAnalyzer") as MockAnalyzer:
+        MockAnalyzer.return_value.analyze.return_value = _make_mock_report()
+        # Pass survived twice via explicit flags
+        run_cli(["--status", "survived", "--status", "survived", "--output", output_path])
+
+        call_args = MockAnalyzer.return_value.analyze.call_args
+        statuses_passed = call_args[0][0]
+    # Should be deduplicated to exactly one occurrence
+    assert statuses_passed.count("bad_survived") == 1
+
+
+# ---------------------------------------------------------------------------
+# classify_mutant — removed_line=None falls back to source_line
+# ---------------------------------------------------------------------------
+
+
+def test_classify_mutant_uses_source_line_when_removed_line_is_none() -> None:
+    """When removed_line is None, classify_mutant uses record.source_line."""
+    record = MutantRecord(
+        mutant_id=77,
+        status="survived",
+        filename="src/agent/loop.py",
+        line_number=10,
+        source_line="if x > 0:",  # logic line → MUST_FIX
+        mutation_index=0,
+    )
+    scope = ScopeInfo(
+        scope_type="function",
+        scope_name="run",
+        node_type="If",  # triggers MUST_FIX
+        module_level_constant=False,
+    )
+    classification, reasons = classify_mutant(
+        record, scope, removed_line=None, added_line="if x >= 0:"
+    )
+    # Uses source_line "if x > 0:" as original; node_type=If → MUST_FIX
+    assert classification == MUST_FIX
+
+
+# ---------------------------------------------------------------------------
+# ContextResolver._is_module_level_constant — ClassDef in path → False
+# ---------------------------------------------------------------------------
+
+
+def test_is_module_level_constant_false_when_class_def_in_path(tmp_path: Path) -> None:
+    """Assignment inside a class body is NOT a module-level constant."""
+    source = "class Config:\n    MAX_SIZE = 100\n"
+    file_path = tmp_path / "cls_const.py"
+    file_path.write_text(source)
+
+    resolver = ContextResolver()
+    scope = resolver.resolve(str(file_path), 2)  # line 2: MAX_SIZE = 100
+    assert scope.module_level_constant is False
+
+
+def test_is_module_level_constant_false_when_function_def_in_path(tmp_path: Path) -> None:
+    """Variable assignment inside a function is NOT a module-level constant."""
+    source = "def run():\n    LIMIT = 10\n    return LIMIT\n"
+    file_path = tmp_path / "fn_const.py"
+    file_path.write_text(source)
+
+    resolver = ContextResolver()
+    scope = resolver.resolve(str(file_path), 2)  # line 2: LIMIT = 10
+    assert scope.module_level_constant is False

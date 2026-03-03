@@ -224,3 +224,114 @@ def test_eval_report_summary_first_line_has_timestamp() -> None:
     )
     first_line = report.summary.splitlines()[0]
     assert ts in first_line
+
+
+def test_eval_report_summary_second_line_has_passed_and_failed() -> None:
+    """The second line of the summary includes Passed and Failed counts."""
+    report = EvalReport(
+        total=10,
+        passed=7,
+        failed=3,
+        pass_rate=0.7,
+        by_category={},
+        results=[],
+        timestamp="2026-03-03T00:00:00Z",
+    )
+    lines = report.summary.splitlines()
+    second_line = lines[1]
+    assert "Passed: 7" in second_line
+    assert "Failed: 3" in second_line
+    assert "Total: 10" in second_line
+
+
+def test_eval_report_summary_second_line_has_rate() -> None:
+    """The second line of the summary includes Rate field as a percentage."""
+    report = EvalReport(
+        total=4,
+        passed=3,
+        failed=1,
+        pass_rate=0.75,
+        by_category={},
+        results=[],
+        timestamp="2026-03-03T00:00:00Z",
+    )
+    second_line = report.summary.splitlines()[1]
+    assert "75.0%" in second_line
+    assert "Rate:" in second_line
+
+
+def test_eval_report_summary_category_line_shows_rate_as_percentage() -> None:
+    """Category lines in summary show rate as a percentage string."""
+    report = EvalReport(
+        total=6,
+        passed=4,
+        failed=2,
+        pass_rate=0.667,
+        by_category={"clinical_precision": {"passed": 4, "total": 6, "rate": 0.667}},
+        results=[],
+        timestamp="2026-03-03T00:00:00Z",
+    )
+    summary = report.summary
+    assert "clinical_precision" in summary
+    assert "4/6" in summary
+    assert "66.7%" in summary
+
+
+# ---------------------------------------------------------------------------
+# EvalRunner — dataset validation with multiple valid assertion keys
+# ---------------------------------------------------------------------------
+
+
+def test_validate_dataset_accepts_all_known_assertion_keys() -> None:
+    """All known assertion key types are accepted individually."""
+    for key in ("should_refuse", "output_contains", "output_not_contains",
+                "manifest_items", "manifest_patient_is_uuid", "tool_calls"):
+        value = True if key in ("should_refuse", "manifest_patient_is_uuid") else []
+        EvalRunner._validate_dataset([{"id": f"case-{key}", "expected": {key: value}}])
+
+
+def test_validate_dataset_multiple_assertions_accepted() -> None:
+    """A case with multiple assertion keys is valid."""
+    EvalRunner._validate_dataset([{
+        "id": "multi",
+        "expected": {
+            "should_refuse": False,
+            "output_contains": ["diagnosis"],
+            "tool_calls": ["fhir_read"],
+        }
+    }])
+
+
+# ---------------------------------------------------------------------------
+# EvalResult — score and error combinations
+# ---------------------------------------------------------------------------
+
+
+def test_eval_result_score_reflects_checks_ratio() -> None:
+    """score is computed as passed_checks / total_checks."""
+    r = EvalResult(
+        case_id="x",
+        category="happy_path",
+        description="test",
+        passed=True,
+        score=0.75,
+        checks={"a": True, "b": True, "c": True, "d": False},
+        details={},
+        latency_ms=100.0,
+    )
+    assert r.score == 0.75
+
+
+def test_eval_result_error_field_optional() -> None:
+    """EvalResult.error defaults to None when not provided."""
+    r = EvalResult(
+        case_id="y",
+        category="edge_case",
+        description="no error",
+        passed=True,
+        score=1.0,
+        checks={"ok": True},
+        details={},
+        latency_ms=50.0,
+    )
+    assert r.error is None

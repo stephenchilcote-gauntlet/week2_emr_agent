@@ -1311,3 +1311,80 @@ def test_session_list_empty_when_no_sessions() -> None:
         sessions = client.get("/api/sessions", headers=_headers("u-empty-list")).json()
 
     assert sessions == []
+
+
+# ------------------------------------------------------------------
+# _session_summary — visible_data non-dict → patient_name is None
+# ------------------------------------------------------------------
+
+
+def test_session_summary_patient_name_none_when_visible_data_is_list() -> None:
+    """When visible_data is a list (not dict), _session_summary returns patient_name=None."""
+    from src.agent.models import PageContext
+    from src.api.main import _session_summary
+
+    session = AgentSession()
+    # Bypass Pydantic validation to simulate legacy sessions with non-dict visible_data
+    session.page_context = PageContext.model_construct(
+        patient_id="33",
+        visible_data=["item1", "item2"],  # list, not dict
+    )
+    summary = _session_summary(session)
+    assert summary["patient_name"] is None
+    assert summary["patient_id"] == "33"
+
+
+def test_session_summary_patient_name_none_when_visible_data_is_string() -> None:
+    """When visible_data is a string (not dict), _session_summary returns patient_name=None."""
+    from src.agent.models import PageContext
+    from src.api.main import _session_summary
+
+    session = AgentSession()
+    session.page_context = PageContext.model_construct(
+        patient_id="34",
+        visible_data="some-string-value",  # string, not dict
+    )
+    summary = _session_summary(session)
+    assert summary["patient_name"] is None
+    assert summary["patient_id"] == "34"
+
+
+# ------------------------------------------------------------------
+# _summarize_tool_calls — None when no tool calls
+# ------------------------------------------------------------------
+
+
+def test_chat_response_tool_calls_summary_is_null_when_no_tool_calls() -> None:
+    """tool_calls_summary is null in chat response when agent makes no tool calls."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-no-tools"),
+            json={"message": "simple question"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["tool_calls_summary"] is None
+
+
+# ------------------------------------------------------------------
+# _session_summary — patient_id None when no page_context
+# ------------------------------------------------------------------
+
+
+def test_session_summary_patient_id_none_when_no_page_context() -> None:
+    """When session has no page_context, session summary patient_id is None."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        client.post(
+            "/api/chat",
+            headers=_headers("u-no-ctx"),
+            json={"message": "question without context"},
+        )
+        sessions = client.get("/api/sessions", headers=_headers("u-no-ctx")).json()
+
+    assert len(sessions) >= 1
+    # Sessions without page_context should have null patient_id
+    no_ctx_sessions = [s for s in sessions if s.get("patient_id") is None]
+    assert len(no_ctx_sessions) >= 1
