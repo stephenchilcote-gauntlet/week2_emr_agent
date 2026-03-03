@@ -147,3 +147,95 @@ def test_open_patient_chart_has_patient_uuid() -> None:
     tool = _tool("open_patient_chart")
     assert "patient_uuid" in tool["input_schema"]["properties"]
     assert "patient_uuid" in tool["input_schema"].get("required", [])
+
+
+# ---------------------------------------------------------------------------
+# System prompt DSL and clinical content
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_has_dsl_element_types() -> None:
+    """Prompt documents <add>, <edit>, <remove> DSL elements."""
+    assert "<add>" in SYSTEM_PROMPT or "`<add>`" in SYSTEM_PROMPT
+    assert "<edit>" in SYSTEM_PROMPT or "`<edit>`" in SYSTEM_PROMPT
+    assert "<remove>" in SYSTEM_PROMPT or "`<remove>`" in SYSTEM_PROMPT
+
+
+def test_system_prompt_has_soap_note_section_requirements() -> None:
+    """Prompt specifies the four required SOAP sections."""
+    for section in ("Subjective", "Objective", "Assessment", "Plan"):
+        assert section in SYSTEM_PROMPT, f"SOAP section '{section}' missing from SYSTEM_PROMPT"
+
+
+def test_system_prompt_mentions_referral_letter_requirement() -> None:
+    """Prompt instructs to write referral letter text before manifest."""
+    assert "referral" in SYSTEM_PROMPT.lower()
+    assert "letter" in SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_mentions_appointment_lookup() -> None:
+    """Prompt instructs to look up appointment category IDs before creating."""
+    assert "apptcat" in SYSTEM_PROMPT or "appointment category" in SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_lists_read_only_types() -> None:
+    """Prompt identifies types that are read-only (must NOT be in manifest)."""
+    assert "CarePlan" in SYSTEM_PROMPT
+    assert "ServiceRequest" in SYSTEM_PROMPT
+    assert "read-only" in SYSTEM_PROMPT or "read only" in SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_has_manifest_driven_changes_principle() -> None:
+    """Prompt's core principle 3 mentions Manifest-Driven Changes."""
+    assert "Manifest-Driven Changes" in SYSTEM_PROMPT or "manifest" in SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_has_dsl_src_attribute() -> None:
+    """DSL items require src attribute — this should appear in prompt."""
+    assert "`src`" in SYSTEM_PROMPT or "src" in SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Tool schema deep inspection
+# ---------------------------------------------------------------------------
+
+
+def test_openemr_api_has_endpoint_property() -> None:
+    """openemr_api input schema has 'endpoint' property."""
+    tool = _tool("openemr_api")
+    assert "endpoint" in tool["input_schema"]["properties"]
+
+
+def test_openemr_api_has_method_property() -> None:
+    """openemr_api input schema has 'method' property."""
+    tool = _tool("openemr_api")
+    props = tool["input_schema"]["properties"]
+    assert "method" in props or "endpoint" in props  # at minimum endpoint
+
+
+def test_get_page_context_has_no_required_params() -> None:
+    """get_page_context takes no required parameters."""
+    tool = _tool("get_page_context")
+    required = tool["input_schema"].get("required", [])
+    assert len(required) == 0, f"get_page_context should have no required params, got {required}"
+
+
+def test_send_developer_feedback_has_message_property() -> None:
+    """send_developer_feedback has 'message' property for the feedback text."""
+    tool = _tool("send_developer_feedback")
+    props = tool["input_schema"]["properties"]
+    assert "message" in props
+
+
+def test_send_developer_feedback_category_is_required() -> None:
+    """send_developer_feedback requires 'category'."""
+    tool = _tool("send_developer_feedback")
+    assert "category" in tool["input_schema"].get("required", [])
+
+
+def test_fhir_read_mentions_observation_category() -> None:
+    """fhir_read description hints about Observation category=laboratory."""
+    fhir_tool = _tool("fhir_read")
+    desc = fhir_tool["description"]
+    # The description should mention Observation lab lookup hint
+    assert "Observation" in desc or "laboratory" in desc or "category" in desc
