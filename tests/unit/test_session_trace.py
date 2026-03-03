@@ -9,13 +9,19 @@ import httpx
 import pytest
 
 from scripts.session_trace import (
+    _extract_key_tags,
     _fetch_jaeger_traces,
+    _format_audit_events,
     _format_conversation,
     _format_header,
     _format_jaeger_traces,
     _format_manifest,
     _format_page_context,
     _load_session,
+    _load_session_from_api,
+    _load_audit_from_api,
+    _parent_span_id,
+    _trace_start,
     main,
 )
 
@@ -317,3 +323,257 @@ def test_main_no_data() -> None:
                 with pytest.raises(SystemExit) as exc_info:
                     main()
                 assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# _format_audit_events
+# ---------------------------------------------------------------------------
+
+
+def test_format_audit_events_empty_list() -> None:
+    """Empty events list still produces a valid markdown table header."""
+    md = _format_audit_events([])
+    assert "Audit Trail" in md
+    assert "0" in md
+    assert "| # |" in md
+
+
+def test_format_audit_events_single_event() -> None:
+    """Single event appears in the markdown table."""
+    events = [
+        {
+            "timestamp": "2026-03-03T12:34:56Z",
+            "event_type": "chat_received",
+            "summary": "User message received",
+            "details": {"message_length": 42},
+        }
+    ]
+    md = _format_audit_events(events)
+    assert "chat_received" in md
+    assert "User message received" in md
+    assert "12:34:56" in md  # time extracted from ISO timestamp
+    assert "💬" in md  # AUDIT_ICONS["chat_received"]
+
+
+def test_format_audit_events_feedback_up_icon() -> None:
+    """message_feedback event with rating='up' shows thumbs-up icon."""
+    events = [
+        {
+            "timestamp": "2026-03-03T10:00:00Z",
+            "event_type": "message_feedback",
+            "summary": "User rated message 0 as up",
+            "details": {"message_index": 0, "rating": "up"},
+        }
+    ]
+    md = _format_audit_events(events)
+    assert "👍" in md
+
+
+def test_format_audit_events_feedback_down_icon() -> None:
+    """message_feedback event with rating='down' shows thumbs-down icon."""
+    events = [
+        {
+            "timestamp": "2026-03-03T10:00:00Z",
+            "event_type": "message_feedback",
+            "summary": "User rated message 0 as down",
+            "details": {"message_index": 0, "rating": "down"},
+        }
+    ]
+    md = _format_audit_events(events)
+    assert "👎" in md
+
+
+def test_format_audit_events_details_truncated_at_80() -> None:
+    """Detail strings longer than 80 chars are truncated with ellipsis."""
+    long_detail = "key=" + "x" * 90  # over 80 chars
+    events = [
+        {
+            "timestamp": "2026-03-03T10:00:00Z",
+            "event_type": "manifest_reviewed",
+            "summary": "Manifest reviewed",
+            "details": {"very_long_key": "x" * 90},
+        }
+    ]
+    md = _format_audit_events(events)
+    assert "…" in md
+
+
+def test_format_audit_events_unknown_event_type_uses_default_icon() -> None:
+    """Unknown event types use the default 📝 icon."""
+    events = [
+        {
+            "timestamp": "2026-03-03T10:00:00Z",
+            "event_type": "assistant_responded",
+            "summary": "Response sent",
+            "details": {},
+        }
+    ]
+    md = _format_audit_events(events)
+    assert "📝" in md
+
+
+# ---------------------------------------------------------------------------
+# _extract_key_tags
+# ---------------------------------------------------------------------------
+
+
+def test_extract_key_tags_returns_known_tags() -> None:
+    """Known tags are returned as key=value strings."""
+    span = {
+        "tags": [
+            {"key": "session.id", "type": "string", "value": "sess-1"},
+            {"key": "tool.name", "type": "string", "value": "fhir_read"},
+            {"key": "unknown.key", "type": "string", "value": "ignored"},
+        ]
+    }
+    attrs = _extract_key_tags(span)
+    assert "session.id=sess-1" in attrs
+    assert "tool.name=fhir_read" in attrs
+    assert len(attrs) == 2  # unknown.key not included
+
+
+def test_extract_key_tags_llm_latency_formatted_with_ms() -> None:
+    """llm.latency_ms is formatted as a float with 'ms' suffix."""
+    span = {
+        "tags": [
+            {"key": "llm.latency_ms", "type": "float", "value": 1234.5},
+        ]
+    }
+    attrs = _extract_key_tags(span)
+    assert len(attrs) == 1
+    assert "ms" in attrs[0]
+    assert "1235" in attrs[0] or "1234" in attrs[0]
+
+
+def test_extract_key_tags_empty_span() -> None:
+    """Span with no tags returns empty list."""
+    attrs = _extract_key_tags({"tags": []})
+    assert attrs == []
+
+
+def test_extract_key_tags_no_tags_key() -> None:
+    """Span without 'tags' key returns empty list."""
+    attrs = _extract_key_tags({})
+    assert attrs == []
+
+
+# ---------------------------------------------------------------------------
+# _parent_span_id
+# ---------------------------------------------------------------------------
+
+
+def test_parent_span_id_returns_child_of_span() -> None:
+    """Returns the spanID from a CHILD_OF reference."""
+    span = {
+        "references": [
+            {"refType": "CHILD_OF", "traceID": "abc", "spanID": "parent-span-123"},
+        ]
+    }
+    assert _parent_span_id(span) == "parent-span-123"
+
+
+def test_parent_span_id_returns_none_when_no_child_of() -> None:
+    """Returns None when no CHILD_OF reference exists."""
+    span = {
+        "references": [
+            {"refType": "FOLLOWS_FROM", "traceID": "abc", "spanID": "other"},
+        ]
+    }
+    assert _parent_span_id(span) is None
+
+
+def test_parent_span_id_returns_none_when_no_references() -> None:
+    """Returns None when references list is empty."""
+    assert _parent_span_id({"references": []}) is None
+
+
+def test_parent_span_id_returns_none_when_key_missing() -> None:
+    """Returns None when span has no 'references' key."""
+    assert _parent_span_id({}) is None
+
+
+# ---------------------------------------------------------------------------
+# _trace_start
+# ---------------------------------------------------------------------------
+
+
+def test_trace_start_returns_minimum_start_time() -> None:
+    """Returns the minimum startTime across all spans."""
+    trace = {
+        "spans": [
+            {"startTime": 1000},
+            {"startTime": 500},
+            {"startTime": 2000},
+        ]
+    }
+    assert _trace_start(trace) == 500
+
+
+def test_trace_start_returns_zero_when_no_spans() -> None:
+    """Returns 0 when the trace has no spans."""
+    assert _trace_start({"spans": []}) == 0
+
+
+def test_trace_start_returns_zero_when_key_missing() -> None:
+    """Returns 0 when trace has no 'spans' key."""
+    assert _trace_start({}) == 0
+
+
+# ---------------------------------------------------------------------------
+# _load_session_from_api — HTTP error and connection error handling
+# ---------------------------------------------------------------------------
+
+
+def test_load_session_from_api_http_error_returns_none() -> None:
+    """HTTP error (e.g. 404) returns None without raising."""
+    request = httpx.Request("GET", "http://example.com")
+    error_response = httpx.Response(404, request=request, text="Not found")
+
+    with patch("httpx.get", side_effect=httpx.HTTPStatusError("404", request=request, response=error_response)):
+        result = _load_session_from_api("http://example.com", "sess-1", "user-1")
+
+    assert result is None
+
+
+def test_load_session_from_api_connect_error_returns_none() -> None:
+    """Connection error returns None without raising."""
+    with patch("httpx.get", side_effect=httpx.ConnectError("refused")):
+        result = _load_session_from_api("http://example.com", "sess-1", "user-1")
+
+    assert result is None
+
+
+def test_load_session_from_api_success_returns_dict() -> None:
+    """Successful response returns the parsed JSON dict."""
+    request = httpx.Request("GET", "http://example.com/api/sessions/sess-1/messages")
+    response = httpx.Response(200, json={"id": "sess-1", "messages": []}, request=request)
+
+    with patch("httpx.get", return_value=response):
+        result = _load_session_from_api("http://example.com", "sess-1", "user-1")
+
+    assert result is not None
+    assert result["id"] == "sess-1"
+
+
+# ---------------------------------------------------------------------------
+# _load_audit_from_api — HTTP and connection error handling
+# ---------------------------------------------------------------------------
+
+
+def test_load_audit_from_api_http_error_returns_empty_list() -> None:
+    """HTTP error returns empty list without raising."""
+    request = httpx.Request("GET", "http://example.com")
+    error_response = httpx.Response(403, request=request, text="Forbidden")
+
+    with patch("httpx.get", side_effect=httpx.HTTPStatusError("403", request=request, response=error_response)):
+        result = _load_audit_from_api("http://example.com", "sess-1", "user-1")
+
+    assert result == []
+
+
+def test_load_audit_from_api_connect_error_returns_empty_list() -> None:
+    """Connection error returns empty list without raising."""
+    with patch("httpx.get", side_effect=httpx.ConnectError("refused")):
+        result = _load_audit_from_api("http://example.com", "sess-1", "user-1")
+
+    assert result == []
