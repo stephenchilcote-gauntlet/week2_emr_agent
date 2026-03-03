@@ -397,6 +397,161 @@ async def test_fhir_read_no_params_does_not_crash() -> None:
 
 
 # ------------------------------------------------------------------
+# _build_manifest additional tests
+# ------------------------------------------------------------------
+
+
+def test_build_manifest_dsl_remove_action() -> None:
+    """DSL <remove> creates a ManifestItem with action='delete'."""
+    condition_uuid = "cccccccc-1111-2222-3333-444444444444"
+    enc_uuid = "eeeeeeee-1111-2222-3333-444444444444"
+
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    session.fhir_patient_id = "patient-1"
+
+    dsl = (
+        f'<remove ref="Condition/{condition_uuid}" '
+        f'src="Encounter/{enc_uuid}" id="rm-1">'
+        "Remove resolved condition"
+        "</remove>"
+    )
+    manifest = loop._build_manifest({"items": dsl}, session)
+
+    assert len(manifest.items) == 1
+    item = manifest.items[0]
+    assert item.action.value == "delete"
+    assert item.resource_type == "Condition"
+    assert item.target_resource_id == condition_uuid
+    assert item.id == "rm-1"
+
+
+def test_build_manifest_dsl_add_with_confidence_and_deps() -> None:
+    """DSL <add> with conf and deps sets confidence and depends_on on item."""
+    enc_uuid = "eeeeeeee-1111-2222-3333-444444444444"
+
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    session.fhir_patient_id = "patient-1"
+
+    dsl = (
+        f'<add type="Condition" code="E11.9" src="Encounter/{enc_uuid}" '
+        f'conf="medium" deps="item-a,item-b" id="cond-1">'
+        "Add diabetes"
+        "</add>"
+    )
+    manifest = loop._build_manifest({"items": dsl}, session)
+
+    assert len(manifest.items) == 1
+    item = manifest.items[0]
+    assert item.confidence == "medium"
+    assert item.depends_on == ["item-a", "item-b"]
+
+
+def test_build_manifest_merges_with_existing_manifest() -> None:
+    """When existing manifest is provided, new items are merged (by ID)."""
+    from src.agent.models import ChangeManifest, ManifestItem, ManifestAction
+
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    session.fhir_patient_id = "patient-1"
+
+    # Existing manifest has item-1 only
+    existing_item = ManifestItem(
+        id="item-1",
+        resource_type="Condition",
+        action=ManifestAction.CREATE,
+        proposed_value={"code": "E11.9"},
+        source_reference="Encounter/123",
+        description="Existing diabetes",
+    )
+    existing_manifest = ChangeManifest(
+        patient_id="patient-1",
+        items=[existing_item],
+    )
+
+    # New DSL adds item-2 and updates item-1
+    dsl = (
+        '<add type="Condition" code="I10" src="Encounter/123" id="item-2">'
+        "Add hypertension"
+        "</add>"
+    )
+    merged = loop._build_manifest(
+        {"items": dsl}, session, existing=existing_manifest
+    )
+
+    assert len(merged.items) == 2
+    item_ids = {i.id for i in merged.items}
+    assert "item-1" in item_ids
+    assert "item-2" in item_ids
+    # Merged manifest keeps existing manifest's ID
+    assert merged.id == existing_manifest.id
+
+
+def test_build_manifest_patient_id_from_arguments_fallback() -> None:
+    """When session has no fhir_patient_id, falls back to arguments patient_id."""
+    enc_uuid = "eeeeeeee-1111-2222-3333-444444444444"
+    expected_patient = "fallback-patient-uuid"
+
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    # No fhir_patient_id set
+    assert session.fhir_patient_id is None
+
+    dsl = (
+        f'<add type="Condition" code="I10" src="Encounter/{enc_uuid}" id="c1">'
+        "Add condition"
+        "</add>"
+    )
+    manifest = loop._build_manifest(
+        {"items": dsl, "patient_id": expected_patient}, session
+    )
+
+    assert manifest.patient_id == expected_patient
+
+
+def test_resolve_fhir_params_resolves_word_ids() -> None:
+    """_resolve_fhir_params replaces word-encoded IDs with hex UUIDs."""
+    from src.agent.labels import uuid_to_words
+
+    uuid = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+    words = uuid_to_words(uuid)
+
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+
+    params = {"patient": words, "category": "problem-list-item"}
+    resolved = loop._resolve_fhir_params(params, session)
+
+    assert resolved["patient"] == uuid
+    assert resolved["category"] == "problem-list-item"  # non-word-id unchanged
+
+
+def test_resolve_fhir_params_passes_through_regular_strings() -> None:
+    """_resolve_fhir_params leaves non-word-id strings unchanged."""
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+
+    params = {"category": "laboratory", "_count": "10"}
+    resolved = loop._resolve_fhir_params(params, session)
+
+    assert resolved == {"category": "laboratory", "_count": "10"}
+
+
+def test_resolve_fhir_params_passes_uuid_unchanged() -> None:
+    """_resolve_fhir_params passes raw UUIDs through unchanged."""
+    uuid = "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+
+    params = {"patient": uuid}
+    resolved = loop._resolve_fhir_params(params, session)
+
+    assert resolved["patient"] == uuid
+
+
+# ------------------------------------------------------------------
 # _truncate_tool_content tests
 # ------------------------------------------------------------------
 
