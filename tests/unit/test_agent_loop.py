@@ -1207,3 +1207,113 @@ def test_extract_tool_calls_empty_response() -> None:
     loop = _make_loop(AsyncMock(), [])
     response = _response()
     assert loop._extract_tool_calls(response) == []
+
+
+# ------------------------------------------------------------------
+# _execute_tool — send_developer_feedback
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_send_developer_feedback_returns_confirmation() -> None:
+    """send_developer_feedback returns feedback_submitted status."""
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+
+    tc = ToolCall(
+        id="t-fb-1",
+        name="send_developer_feedback",
+        arguments={"category": "bug", "message": "Search returns 500 on empty query"},
+    )
+    result = await loop._execute_tool(tc, session)
+
+    assert not result.is_error
+    parsed = json.loads(result.content)
+    assert parsed["status"] == "feedback_submitted"
+    assert parsed["category"] == "bug"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_send_developer_feedback_feature_request() -> None:
+    """send_developer_feedback works for feature_request category."""
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+
+    tc = ToolCall(
+        id="t-fb-2",
+        name="send_developer_feedback",
+        arguments={"category": "feature_request", "message": "Add dark mode support"},
+    )
+    result = await loop._execute_tool(tc, session)
+
+    assert not result.is_error
+    parsed = json.loads(result.content)
+    assert parsed["status"] == "feedback_submitted"
+    assert parsed["category"] == "feature_request"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_send_developer_feedback_records_audit_when_store_set() -> None:
+    """send_developer_feedback records an audit event when audit_store is configured."""
+    from unittest.mock import MagicMock
+    from src.observability.audit import AuditStore
+
+    mock_audit = MagicMock(spec=AuditStore)
+    loop = _make_loop(AsyncMock(), [])
+    loop.audit_store = mock_audit
+    session = AgentSession()
+    session.openemr_user_id = "doc-1"
+
+    tc = ToolCall(
+        id="t-fb-3",
+        name="send_developer_feedback",
+        arguments={"category": "improvement", "message": "Better error messages"},
+    )
+    await loop._execute_tool(tc, session)
+
+    mock_audit.record.assert_called_once()
+    call_args = mock_audit.record.call_args[0][0]
+    assert call_args.event_type == "developer_feedback"
+    assert call_args.user_id == "doc-1"
+
+
+# ------------------------------------------------------------------
+# _execute_tool — get_page_context
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_get_page_context_with_context_set() -> None:
+    """get_page_context returns the session's page context when set."""
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    session.page_context = PageContext(
+        patient_id="42",
+        encounter_id="enc-99",
+        page_type="encounter",
+    )
+
+    tc = ToolCall(id="t-ctx-1", name="get_page_context", arguments={})
+    result = await loop._execute_tool(tc, session)
+
+    assert not result.is_error
+    parsed = json.loads(result.content)
+    assert parsed["patient_id"] == "42"
+    assert parsed["encounter_id"] == "enc-99"
+    assert parsed["page_type"] == "encounter"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_get_page_context_without_context() -> None:
+    """get_page_context returns a message when no context is set."""
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    # session.page_context is None by default
+
+    tc = ToolCall(id="t-ctx-2", name="get_page_context", arguments={})
+    result = await loop._execute_tool(tc, session)
+
+    assert not result.is_error
+    parsed = json.loads(result.content)
+    assert "message" in parsed
+    assert "No page context" in parsed["message"]

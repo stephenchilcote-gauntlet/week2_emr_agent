@@ -487,3 +487,225 @@ class TestSessionStateAfterExecution:
         assert manifest_items[1].status == "skipped"
         assert manifest_items[1].execution_result == "Dependency failed"
         assert "1 skipped" in session.messages[-1].content
+
+
+# ==================================================================
+# Error detection in API responses
+# ==================================================================
+
+class TestExecuteApprovedErrorDetection:
+
+    @pytest.mark.asyncio
+    async def test_validation_errors_in_result_marks_item_failed(self):
+        """If the REST response contains 'validationErrors', the item should fail."""
+        openemr_client = AsyncMock()
+        openemr_client.api_call.side_effect = [
+            [],  # pre-cache
+            {"validationErrors": [{"field": "diagnosis", "message": "invalid format"}]},
+        ]
+        loop = _make_loop(openemr_client)
+        session = _make_session(items=[
+            ManifestItem(
+                id="val-err-1",
+                resource_type="Condition",
+                action=ManifestAction.CREATE,
+                proposed_value={"code": "NOTVALID", "display": "Bad code"},
+                source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                description="Item with validation error",
+                status="approved",
+            ),
+        ])
+
+        manifest_items = session.manifest.items
+
+        session = await loop.execute_approved(session)
+
+        item = manifest_items[0]
+        assert item.status == "failed"
+        assert "validationErrors" in item.execution_result or "diagnosis" in item.execution_result
+
+    @pytest.mark.asyncio
+    async def test_error_key_in_result_marks_item_failed(self):
+        """If the REST response dict contains 'error' key, item should fail."""
+        openemr_client = AsyncMock()
+        openemr_client.api_call.side_effect = [
+            [],  # pre-cache
+            {"error": "Patient UUID not found", "status_code": 404},
+        ]
+        loop = _make_loop(openemr_client)
+        session = _make_session(items=[
+            ManifestItem(
+                id="err-key-1",
+                resource_type="Condition",
+                action=ManifestAction.CREATE,
+                proposed_value={"code": "E11.9", "display": "Diabetes"},
+                source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                description="Item with error response",
+                status="approved",
+            ),
+        ])
+
+        manifest_items = session.manifest.items
+
+        session = await loop.execute_approved(session)
+
+        item = manifest_items[0]
+        assert item.status == "failed"
+        assert "Patient UUID not found" in item.execution_result
+
+    @pytest.mark.asyncio
+    async def test_field_level_validation_errors_marks_item_failed(self):
+        """If the result is all-dict-values without 'data', it's a validation error."""
+        openemr_client = AsyncMock()
+        openemr_client.api_call.side_effect = [
+            [],  # pre-cache
+            {
+                "begdate": {"errors": ["invalid_date"]},
+                "diagnosis": {"errors": ["invalid_format"]},
+            },
+        ]
+        loop = _make_loop(openemr_client)
+        session = _make_session(items=[
+            ManifestItem(
+                id="field-err-1",
+                resource_type="Condition",
+                action=ManifestAction.CREATE,
+                proposed_value={"code": "E11.9", "display": "Diabetes"},
+                source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                description="Item with field-level error",
+                status="approved",
+            ),
+        ])
+
+        manifest_items = session.manifest.items
+
+        session = await loop.execute_approved(session)
+
+        item = manifest_items[0]
+        assert item.status == "failed"
+
+
+# ==================================================================
+# CREATE happy paths for other resource types
+# ==================================================================
+
+class TestCreateAllergyIntolerance:
+
+    @pytest.mark.asyncio
+    async def test_create_allergy_posts_to_uuid_endpoint(self):
+        """AllergyIntolerance CREATE uses patient UUID in the endpoint."""
+        openemr_client = AsyncMock()
+        openemr_client.api_call.side_effect = [
+            [],  # pre-cache: GET patient/5/medication
+            {"uuid": "new-allergy-uuid", "id": 55},  # POST result
+        ]
+        loop = _make_loop(openemr_client)
+        session = _make_session(items=[
+            ManifestItem(
+                id="allergy-create-1",
+                resource_type="AllergyIntolerance",
+                action=ManifestAction.CREATE,
+                proposed_value={"substance": "Penicillin", "onset": "2020-01-01"},
+                source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                description="Penicillin allergy",
+                status="approved",
+            ),
+        ])
+
+        manifest_items = session.manifest.items
+
+        session = await loop.execute_approved(session)
+
+        item = manifest_items[0]
+        assert item.status == "completed"
+
+        post_call = openemr_client.api_call.call_args_list[1]
+        assert f"patient/{PATIENT_FHIR_UUID}/allergy" in post_call.kwargs["endpoint"]
+        assert post_call.kwargs["method"] == "POST"
+        payload = post_call.kwargs["payload"]
+        assert payload["title"] == "Penicillin"
+
+
+class TestCreateSoapNote:
+
+    @pytest.mark.asyncio
+    async def test_create_soap_note_posts_to_encounter_endpoint(self):
+        """SoapNote CREATE posts to encounter-scoped soap_note endpoint."""
+        openemr_client = AsyncMock()
+        openemr_client.api_call.side_effect = [
+            [],  # pre-cache
+            {"id": 10},  # POST result
+        ]
+        loop = _make_loop(openemr_client)
+        # SoapNote needs encounter_id in manifest
+        session = _make_session(
+            encounter_id=ENCOUNTER_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="soap-create-1",
+                    resource_type="SoapNote",
+                    action=ManifestAction.CREATE,
+                    proposed_value={
+                        "subjective": "Patient reports chest pain",
+                        "objective": "BP 140/90",
+                        "assessment": "Hypertension",
+                        "plan": "Start lisinopril",
+                    },
+                    source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                    description="SOAP note for encounter",
+                    status="approved",
+                ),
+            ],
+        )
+
+        manifest_items = session.manifest.items
+
+        session = await loop.execute_approved(session)
+
+        item = manifest_items[0]
+        assert item.status == "completed"
+
+        post_call = openemr_client.api_call.call_args_list[1]
+        assert "soap_note" in post_call.kwargs["endpoint"]
+        assert post_call.kwargs["method"] == "POST"
+
+
+# ==================================================================
+# _build_manifest — encounter_id from page_context
+# ==================================================================
+
+class TestBuildManifestEncounterId:
+
+    def test_encounter_id_from_page_context(self):
+        """_build_manifest picks up encounter_id from session.page_context."""
+        loop = _make_loop(AsyncMock())
+        session = AgentSession()
+        session.fhir_patient_id = PATIENT_FHIR_UUID
+        session.page_context = PageContext(
+            patient_id=PATIENT_PID,
+            encounter_id=ENCOUNTER_FHIR_UUID,
+        )
+
+        manifest = loop._build_manifest(
+            {"items": []},
+            session,
+        )
+
+        assert manifest.encounter_id == ENCOUNTER_FHIR_UUID
+
+    def test_encounter_id_from_arguments_overrides_context(self):
+        """When encounter_id is in arguments, it takes precedence over page_context."""
+        loop = _make_loop(AsyncMock())
+        session = AgentSession()
+        session.fhir_patient_id = PATIENT_FHIR_UUID
+        session.page_context = PageContext(
+            patient_id=PATIENT_PID,
+            encounter_id="old-encounter-id",
+        )
+
+        manifest = loop._build_manifest(
+            {"items": [], "encounter_id": "new-encounter-id"},
+            session,
+        )
+
+        assert manifest.encounter_id == "new-encounter-id"
