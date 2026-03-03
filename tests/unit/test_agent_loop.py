@@ -1317,3 +1317,184 @@ async def test_execute_tool_get_page_context_without_context() -> None:
     parsed = json.loads(result.content)
     assert "message" in parsed
     assert "No page context" in parsed["message"]
+
+
+# ------------------------------------------------------------------
+# _count_tokens
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_returns_zero_when_no_counter() -> None:
+    """_count_tokens returns 0 when anthropic client has no count_tokens method."""
+    from types import SimpleNamespace
+    anthropic_client = SimpleNamespace(
+        messages=SimpleNamespace()  # no count_tokens attribute
+    )
+    loop = AgentLoop(anthropic_client=anthropic_client, openemr_client=AsyncMock())
+    result = await loop._count_tokens([], "system prompt")
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_returns_token_count_from_counter() -> None:
+    """_count_tokens returns input_tokens from the counter result."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock as AM
+
+    counter_result = SimpleNamespace(input_tokens=1234)
+    counter = AM(return_value=counter_result)
+    anthropic_client = SimpleNamespace(
+        messages=SimpleNamespace(count_tokens=counter)
+    )
+    loop = AgentLoop(anthropic_client=anthropic_client, openemr_client=AsyncMock())
+    result = await loop._count_tokens(
+        [{"role": "user", "content": "hello"}],
+        "system prompt",
+    )
+    assert result == 1234
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_falls_back_to_json_estimate_on_exception() -> None:
+    """_count_tokens estimates from JSON size when counter raises an exception."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock as AM
+
+    counter = AM(side_effect=ConnectionError("timeout"))
+    anthropic_client = SimpleNamespace(
+        messages=SimpleNamespace(count_tokens=counter)
+    )
+    loop = AgentLoop(anthropic_client=anthropic_client, openemr_client=AsyncMock())
+    messages = [{"role": "user", "content": "hello world"}]
+    system = "system prompt text"
+    result = await loop._count_tokens(messages, system)
+    # Estimate = (json size + system len) // 4 — should be > 0
+    assert result > 0
+    # Verify it matches the formula
+    import json as json_mod
+    expected = (len(json_mod.dumps(messages)) + len(system)) // 4
+    assert result == expected
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_context_field — long-string truncation
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_context_field_truncates_at_100_chars() -> None:
+    """_sanitize_context_field truncates values longer than 100 characters."""
+    loop = _make_loop(AsyncMock(), [])
+    long_value = "A" * 200
+    result = loop._sanitize_context_field(long_value)
+    assert len(result) == 100
+    assert result == "A" * 100
+
+
+def test_sanitize_context_field_exactly_100_chars_not_truncated() -> None:
+    """_sanitize_context_field preserves a value of exactly 100 characters."""
+    loop = _make_loop(AsyncMock(), [])
+    exactly_100 = "B" * 100
+    result = loop._sanitize_context_field(exactly_100)
+    assert result == exactly_100
+
+
+def test_sanitize_context_field_replaces_carriage_return() -> None:
+    """_sanitize_context_field replaces \\r with space."""
+    loop = _make_loop(AsyncMock(), [])
+    result = loop._sanitize_context_field("hello\rworld")
+    assert "\r" not in result
+    assert "hello world" == result
+
+
+# ---------------------------------------------------------------------------
+# _render_visible_data — list of non-dict items
+# ---------------------------------------------------------------------------
+
+
+def test_render_visible_data_list_of_strings() -> None:
+    """List sections with string items use the > - prefix (not key: value)."""
+    loop = _make_loop(AsyncMock(), [])
+    result = loop._render_visible_data({
+        "diagnoses": ["Type 2 DM", "Hypertension", "Obesity"]
+    })
+    assert "Diagnoses" in result
+    assert "> - Type 2 DM" in result
+    assert "> - Hypertension" in result
+    assert "> - Obesity" in result
+
+
+def test_render_visible_data_mixed_list() -> None:
+    """Mixed list (dicts and strings) renders correctly for each item type."""
+    loop = _make_loop(AsyncMock(), [])
+    result = loop._render_visible_data({
+        "items": [
+            {"code": "I10"},   # dict → key: value
+            "plain string",    # string → > - plain string
+        ]
+    })
+    assert "code: I10" in result
+    assert "> - plain string" in result
+
+
+# ---------------------------------------------------------------------------
+# _get_system_prompt — with visible_data in page_context
+# ---------------------------------------------------------------------------
+
+
+def test_get_system_prompt_with_visible_data() -> None:
+    """visible_data in page_context is rendered into the system prompt."""
+    from src.agent.models import AgentSession, PageContext
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession(
+        page_context=PageContext(
+            patient_id="42",
+            visible_data={"conditions": [{"code": "I10", "display": "Hypertension"}]},
+        )
+    )
+    result = loop._get_system_prompt(session)
+    assert "Conditions" in result
+    assert "I10" in result
+    assert "Hypertension" in result
+
+
+# ---------------------------------------------------------------------------
+# _build_messages — assistant with no text content and no tool calls
+# ---------------------------------------------------------------------------
+
+
+def test_build_messages_assistant_empty_content() -> None:
+    """Assistant message with empty content and no tool calls produces empty content block."""
+    from src.agent.models import AgentMessage, AgentSession
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession(
+        messages=[AgentMessage(role="assistant", content="")]
+    )
+    result = loop._build_messages(session)
+    assert len(result) == 1
+    # Empty content list when no text and no tool calls
+    assert result[0]["role"] == "assistant"
+    content = result[0]["content"]
+    assert isinstance(content, list)
+    assert len(content) == 0  # no text block, no tool_use blocks
+
+
+# ---------------------------------------------------------------------------
+# _truncate_messages — no user messages in conversation
+# ---------------------------------------------------------------------------
+
+
+def test_truncate_messages_no_user_message_uses_index_zero() -> None:
+    """_truncate_messages defaults to first message when no user message found."""
+    loop = _make_loop(AsyncMock(), [])
+    messages = [
+        {"role": "assistant", "content": "Hello"},
+        {"role": "assistant", "content": "World"},
+        {"role": "assistant", "content": "1"},
+        {"role": "assistant", "content": "2"},
+        {"role": "assistant", "content": "3"},
+    ]
+    result = loop._truncate_messages(messages)
+    # First message should be preserved (index 0, since no user msg found)
+    assert result[0] == {"role": "assistant", "content": "Hello"}
+    assert len(result) >= 3  # first + note + tail
