@@ -332,3 +332,264 @@ async def test_ensure_auth_clears_token_on_failure() -> None:
     await client._ensure_auth()
 
     assert client._access_token is None
+
+
+# ------------------------------------------------------------------
+# api_call PUT and DELETE
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_api_call_put_sends_json_payload() -> None:
+    """PUT calls send the payload as JSON body."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="client-id",
+        client_secret="secret",
+    )
+    client._ensure_auth = AsyncMock()
+    client._http.put = AsyncMock(return_value=_http_response(200, {"updated": True}))
+
+    result = await client.api_call(
+        "patient/1/medical_problem/123",
+        method="PUT",
+        payload={"title": "Updated Diabetes"},
+    )
+
+    assert result == {"updated": True}
+    client._http.put.assert_called_once()
+    _, call_kwargs = client._http.put.call_args
+    assert call_kwargs.get("json") == {"title": "Updated Diabetes"}
+
+
+@pytest.mark.asyncio
+async def test_api_call_delete_sends_request() -> None:
+    """DELETE calls do not include a JSON body."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="client-id",
+        client_secret="secret",
+    )
+    client._ensure_auth = AsyncMock()
+    client._http.delete = AsyncMock(return_value=_http_response(200, {"deleted": True}))
+
+    result = await client.api_call("patient/1/allergy/456", method="DELETE")
+
+    assert result == {"deleted": True}
+    client._http.delete.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_call_put_http_error_returns_error_dict() -> None:
+    """Non-2xx response on PUT returns error dict with status_code."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="client-id",
+        client_secret="secret",
+    )
+    client._ensure_auth = AsyncMock()
+    client._http.put = AsyncMock(return_value=_http_response(422, {"error": "validation failed"}))
+
+    result = await client.api_call("patient/1/allergy/99", method="PUT", payload={"x": 1})
+
+    assert "error" in result
+    assert result.get("status_code") == 422
+
+
+@pytest.mark.asyncio
+async def test_api_call_post_retries_once_on_401_after_reauth() -> None:
+    """POST 401 also triggers token refresh and retry."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="client-id",
+        client_secret="secret",
+    )
+    client._ensure_auth = AsyncMock()
+
+    unauthorized = _http_response(401, {"error": "expired"})
+    success = _http_response(200, {"uuid": "new-1"})
+    client._http.post = AsyncMock(side_effect=[unauthorized, success])
+
+    result = await client.api_call("patient", method="POST", payload={"fname": "John"})
+
+    assert result == {"uuid": "new-1"}
+    assert client._ensure_auth.await_count == 2
+
+
+# ------------------------------------------------------------------
+# _auth_headers
+# ------------------------------------------------------------------
+
+
+def test_auth_headers_with_token() -> None:
+    """_auth_headers returns Authorization header when a token is set."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="client-id",
+    )
+    client._access_token = "test-token-abc"
+
+    headers = client._auth_headers()
+
+    assert headers == {"Authorization": "Bearer test-token-abc"}
+
+
+def test_auth_headers_without_token() -> None:
+    """_auth_headers returns an empty dict when no token is set."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="client-id",
+    )
+    # Default: _access_token is None
+
+    headers = client._auth_headers()
+
+    assert headers == {}
+
+
+# ------------------------------------------------------------------
+# close()
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_close_calls_aclose() -> None:
+    """close() delegates to the underlying httpx AsyncClient."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="",
+    )
+    client._http.aclose = AsyncMock()
+
+    await client.close()
+
+    client._http.aclose.assert_called_once()
+
+
+# ------------------------------------------------------------------
+# ensure_auth — missing access_token key in response
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ensure_auth_handles_missing_access_token_key() -> None:
+    """Response missing 'access_token' key clears token (KeyError handled)."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="client-id",
+        client_secret="secret",
+    )
+    # HTTP 200 but response body has no "access_token" key
+    client._http.post = AsyncMock(
+        return_value=_http_response(200, {"token_type": "bearer"})
+    )
+
+    await client._ensure_auth()
+
+    assert client._access_token is None
+
+
+# ------------------------------------------------------------------
+# fhir_read URL construction
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fhir_read_constructs_correct_url() -> None:
+    """fhir_read GETs {fhir_url}/{resource_type}."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="",
+    )
+    client._http.get = AsyncMock(
+        return_value=_http_response(200, {"resourceType": "Patient"})
+    )
+
+    await client.fhir_read("Patient/123")
+
+    call_args = client._http.get.call_args
+    url = call_args.args[0] if call_args.args else call_args.kwargs.get("url", "")
+    assert url == "https://example.com/fhir/Patient/123"
+
+
+@pytest.mark.asyncio
+async def test_fhir_read_passes_query_params() -> None:
+    """fhir_read forwards params dict as query string."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="",
+    )
+    client._http.get = AsyncMock(
+        return_value=_http_response(200, {"resourceType": "Bundle", "total": 0})
+    )
+
+    await client.fhir_read("Patient", {"_id": "uuid-123", "category": "laboratory"})
+
+    call_args = client._http.get.call_args
+    passed_params = call_args.kwargs.get("params") or (call_args.args[1] if len(call_args.args) > 1 else None)
+    # params is passed as keyword argument
+    assert call_args.kwargs.get("params") == {"_id": "uuid-123", "category": "laboratory"}
+
+
+@pytest.mark.asyncio
+async def test_fhir_read_without_params() -> None:
+    """fhir_read works when params is None (no query string)."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="",
+    )
+    client._http.get = AsyncMock(
+        return_value=_http_response(200, {"resourceType": "CapabilityStatement"})
+    )
+
+    result = await client.fhir_read("metadata")
+
+    assert result["resourceType"] == "CapabilityStatement"
+
+
+# ------------------------------------------------------------------
+# get_fhir_metadata — network error
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_fhir_metadata_network_error_returns_error_dict() -> None:
+    """Network failure in get_fhir_metadata returns error dict."""
+    client = OpenEMRClient(
+        base_url="https://example.com",
+        fhir_url="https://example.com/fhir",
+        client_id="",
+    )
+    client._http.get = AsyncMock(side_effect=httpx.RequestError("timeout"))
+
+    result = await client.get_fhir_metadata()
+
+    assert "error" in result
+    assert "timeout" in result["error"]
+
+
+# ------------------------------------------------------------------
+# base_url / fhir_url trailing slash stripping
+# ------------------------------------------------------------------
+
+
+def test_base_url_trailing_slash_is_stripped() -> None:
+    """Trailing slashes on base_url are removed to avoid double-slash URLs."""
+    client = OpenEMRClient(
+        base_url="https://example.com/",
+        fhir_url="https://example.com/fhir/",
+        client_id="",
+    )
+    assert not client.base_url.endswith("/")
+    assert not client.fhir_url.endswith("/")
