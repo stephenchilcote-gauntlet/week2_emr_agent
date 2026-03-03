@@ -331,3 +331,41 @@ def test_session_store_cache_hit_wrong_user_returns_none(tmp_path: Path) -> None
     # Attacker should still get None even with cached session
     result = store.load(session.id, "attacker")
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _decode_session_payload — both empty string fields simultaneously
+# ---------------------------------------------------------------------------
+
+
+def test_decode_session_payload_with_both_empty_strings() -> None:
+    """Empty string page_context AND manifest are both normalized to None."""
+    import json
+    session = AgentSession(openemr_user_id="u-both")
+    payload = session.model_dump(mode="json")
+    payload["page_context"] = ""  # old serialization bug
+    payload["manifest"] = ""  # old serialization bug
+
+    decoded = SessionStore._decode_session_payload(json.dumps(payload))
+    assert decoded.page_context is None
+    assert decoded.manifest is None
+
+
+# ---------------------------------------------------------------------------
+# _migrate_add_patient_id — idempotent when column already exists
+# ---------------------------------------------------------------------------
+
+
+def test_session_store_migration_idempotent_on_second_init(tmp_path: Path) -> None:
+    """Initializing SessionStore twice on the same DB does not raise (migration is idempotent)."""
+    db_path = str(tmp_path / "sessions.db")
+    # First init creates the table and runs migration
+    store1 = SessionStore(db_path)
+    session = AgentSession(openemr_user_id="u-migrate")
+    store1.save(session)
+
+    # Second init on same DB: migration should handle patient_id column already existing
+    store2 = SessionStore(db_path)
+    loaded = store2.load(session.id, "u-migrate")
+    assert loaded is not None
+    assert loaded.id == session.id

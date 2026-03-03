@@ -784,3 +784,97 @@ class TestMedicationEditWithoutDrug:
         result = to_openemr_rest(item, PATIENT_UUID)
         # action="add" triggers the branch, so title is built from empty drug + dose
         assert result["title"] == "500mg"
+
+
+# ---------------------------------------------------------------------------
+# _as_date and _as_datetime — non-matching string passthrough
+# ---------------------------------------------------------------------------
+
+
+class TestAsDatePassthrough:
+    def test_as_date_non_date_string_returned_unchanged(self) -> None:
+        """_as_date with a non-date string returns it unchanged (no regex match)."""
+        # _date_or_none passes truthy strings through; _DATE_PREFIX_RE won't match
+        result = _as_date("not-a-date")
+        assert result == "not-a-date"
+
+    def test_as_date_random_word_returned_unchanged(self) -> None:
+        """Any truthy non-date string is returned verbatim."""
+        assert _as_date("hello world") == "hello world"
+
+    def test_as_datetime_non_datetime_string_returned_unchanged(self) -> None:
+        """_as_datetime with a non-matching string falls through to return original."""
+        # "25:61:90" passes _date_or_none but neither regex matches it
+        result = _as_datetime("25:61:90")
+        assert result == "25:61:90"
+
+    def test_as_datetime_arbitrary_string_passthrough(self) -> None:
+        """Any truthy non-date/datetime string is returned verbatim."""
+        assert _as_datetime("random") == "random"
+
+
+# ---------------------------------------------------------------------------
+# _build_condition_rest — edit action without onset/begdate
+# ---------------------------------------------------------------------------
+
+
+class TestConditionEditBegdate:
+    def test_edit_condition_without_onset_begdate_is_none(self) -> None:
+        """Editing a condition without onset does NOT inject today's date."""
+        item = _make_item(
+            action="edit",
+            resource_type="Condition",
+            description="Update condition",
+            attrs={"code": "E11.9", "display": "Type 2 DM"},  # no onset
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        # edit action should NOT fill in today's date
+        assert result["begdate"] is None
+
+
+# ---------------------------------------------------------------------------
+# _build_allergy_rest — begdate field (not onset) priority
+# ---------------------------------------------------------------------------
+
+
+class TestAllergyBegdateField:
+    def test_allergy_uses_begdate_when_onset_absent(self) -> None:
+        """_build_allergy_rest uses 'begdate' attr when 'onset' is not provided."""
+        item = _make_item(
+            resource_type="AllergyIntolerance",
+            description="Latex allergy",
+            attrs={"substance": "Latex", "begdate": "2021-06-15"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        # begdate wins over onset when only begdate is provided
+        assert result["begdate"] == "2021-06-15 00:00:00"
+        assert result["title"] == "Latex"
+
+    def test_allergy_onset_takes_priority_when_both_provided(self) -> None:
+        """When both begdate and onset provided, onset is NOT used over begdate (begdate or onset)."""
+        item = _make_item(
+            resource_type="AllergyIntolerance",
+            description="NKA",
+            attrs={"substance": "Penicillin", "begdate": "2022-01-01", "onset": "2020-05-10"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        # begdate is checked first (attrs.get("begdate") or attrs.get("onset"))
+        assert result["begdate"] == "2022-01-01 00:00:00"
+
+
+# ---------------------------------------------------------------------------
+# _build_encounter_rest — both date and onset present
+# ---------------------------------------------------------------------------
+
+
+class TestEncounterBothFields:
+    def test_encounter_with_both_date_and_onset(self) -> None:
+        """Encounter with both date and onset renders both as separate fields."""
+        item = _make_item(
+            resource_type="Encounter",
+            description="Visit",
+            attrs={"date": "2024-03-01", "onset": "2024-02-28"},
+        )
+        result = to_openemr_rest(item, PATIENT_UUID)
+        assert result["date"] == "2024-03-01"
+        assert result["onset_date"] == "2024-02-28"
