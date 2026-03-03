@@ -162,3 +162,128 @@ class TestToolResult:
         }
         roundtrip = ToolResult.model_validate(data)
         assert roundtrip == tr
+
+
+# ---------------------------------------------------------------------------
+# Additional edge-case coverage
+# ---------------------------------------------------------------------------
+
+
+class TestManifestItemAdditionalFields:
+    def test_execution_result_stored(self):
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.CREATE,
+            proposed_value={},
+            source_reference="enc/1",
+            description="Test",
+            execution_result="201 Created",
+        )
+        assert item.execution_result == "201 Created"
+
+    def test_target_resource_id_stored(self):
+        item = ManifestItem(
+            resource_type="AllergyIntolerance",
+            action=ManifestAction.UPDATE,
+            proposed_value={},
+            source_reference="enc/1",
+            description="Update allergy",
+            target_resource_id="allergy-uuid-123",
+        )
+        assert item.target_resource_id == "allergy-uuid-123"
+
+    def test_status_approved(self):
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.CREATE,
+            proposed_value={},
+            source_reference="enc/1",
+            description="Test",
+            status="approved",
+        )
+        assert item.status == "approved"
+
+    def test_delete_action(self):
+        item = ManifestItem(
+            resource_type="MedicationRequest",
+            action=ManifestAction.DELETE,
+            proposed_value={},
+            source_reference="enc/1",
+            description="Remove medication",
+        )
+        assert item.action == ManifestAction.DELETE
+
+
+class TestPageContextAdditionalFields:
+    def test_visible_data_stored(self):
+        ctx = PageContext(visible_data={"conditions": [{"code": "E11.9"}]})
+        assert ctx.visible_data == {"conditions": [{"code": "E11.9"}]}
+
+    def test_active_form_stored(self):
+        ctx = PageContext(active_form={"form_type": "vitals", "enc_id": "5"})
+        assert ctx.active_form == {"form_type": "vitals", "enc_id": "5"}
+
+    def test_serialization_round_trip(self):
+        ctx = PageContext(
+            patient_id="p1",
+            encounter_id="e1",
+            page_type="encounter",
+            visible_data={"allergies": []},
+        )
+        data = ctx.model_dump()
+        restored = PageContext.model_validate(data)
+        assert restored.patient_id == "p1"
+        assert restored.visible_data == {"allergies": []}
+
+
+class TestAgentSessionAdditionalFields:
+    def test_openemr_user_id(self):
+        session = AgentSession(openemr_user_id="user-admin")
+        assert session.openemr_user_id == "user-admin"
+
+    def test_fhir_patient_id(self):
+        session = AgentSession(fhir_patient_id="bbb13f7a-966e-4c7c-aea5-4bac3ce98505")
+        assert session.fhir_patient_id == "bbb13f7a-966e-4c7c-aea5-4bac3ce98505"
+
+    def test_openemr_pid(self):
+        session = AgentSession(openemr_pid="4")
+        assert session.openemr_pid == "4"
+
+    def test_navigate_to_patient(self):
+        nav = {"pid": "4", "name": "Maria Santos"}
+        session = AgentSession(navigate_to_patient=nav)
+        assert session.navigate_to_patient == nav
+
+    def test_serialization_preserves_fields(self):
+        session = AgentSession(
+            openemr_user_id="admin",
+            fhir_patient_id="uuid-1",
+            openemr_pid="4",
+        )
+        data = session.model_dump(mode="json")
+        assert data["openemr_user_id"] == "admin"
+        assert data["fhir_patient_id"] == "uuid-1"
+        assert data["openemr_pid"] == "4"
+        assert "created_at" in data
+
+
+class TestAgentMessageAdditionalFields:
+    def test_assistant_with_tool_calls(self):
+        tc = ToolCall(name="fhir_read", arguments={"resource_type": "Patient"}, id="tc-1")
+        msg = AgentMessage(role="assistant", content="", tool_calls=[tc])
+        assert len(msg.tool_calls) == 1
+        assert msg.tool_calls[0].name == "fhir_read"
+
+    def test_tool_message_with_results(self):
+        tr = ToolResult(tool_call_id="tc-1", content='{"status": "ok"}')
+        msg = AgentMessage(role="tool", content="", tool_results=[tr])
+        assert len(msg.tool_results) == 1
+        assert not msg.tool_results[0].is_error
+
+    def test_assistant_role_accepted(self):
+        msg = AgentMessage(role="assistant", content="Here is the result.")
+        assert msg.role == "assistant"
+
+    def test_user_role_accepted(self):
+        msg = AgentMessage(role="user", content="What are the conditions?")
+        assert msg.role == "user"
