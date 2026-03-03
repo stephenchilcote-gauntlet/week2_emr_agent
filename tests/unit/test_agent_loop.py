@@ -759,3 +759,296 @@ def test_topological_sort_handles_missing_dependency() -> None:
     result = loop._topological_sort([item])
     assert len(result) == 1
     assert result[0].id == "a"
+
+
+# ---------------------------------------------------------------------------
+# _build_messages
+# ---------------------------------------------------------------------------
+
+
+def test_build_messages_user_message() -> None:
+    """User messages become role=user with content string."""
+    from src.agent.models import AgentMessage, AgentSession
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession(
+        messages=[AgentMessage(role="user", content="Hello there")]
+    )
+    result = loop._build_messages(session)
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert result[0]["content"] == "Hello there"
+
+
+def test_build_messages_assistant_text_only() -> None:
+    """Assistant message with text becomes text block in content list."""
+    from src.agent.models import AgentMessage, AgentSession
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession(
+        messages=[AgentMessage(role="assistant", content="Here is the answer")]
+    )
+    result = loop._build_messages(session)
+    assert len(result) == 1
+    assert result[0]["role"] == "assistant"
+    content = result[0]["content"]
+    assert len(content) == 1
+    assert content[0]["type"] == "text"
+    assert content[0]["text"] == "Here is the answer"
+
+
+def test_build_messages_assistant_with_tool_calls() -> None:
+    """Assistant message with tool calls includes tool_use blocks."""
+    from src.agent.models import AgentMessage, AgentSession, ToolCall
+    loop = _make_loop(AsyncMock(), [])
+    tc = ToolCall(id="tc-1", name="fhir_read", arguments={"resource_type": "Patient"})
+    session = AgentSession(
+        messages=[
+            AgentMessage(role="assistant", content="Calling FHIR", tool_calls=[tc])
+        ]
+    )
+    result = loop._build_messages(session)
+    assert len(result) == 1
+    content = result[0]["content"]
+    assert len(content) == 2
+    assert content[0] == {"type": "text", "text": "Calling FHIR"}
+    assert content[1]["type"] == "tool_use"
+    assert content[1]["id"] == "tc-1"
+    assert content[1]["name"] == "fhir_read"
+    assert content[1]["input"] == {"resource_type": "Patient"}
+
+
+def test_build_messages_tool_result() -> None:
+    """Tool result messages become role=user with tool_result blocks."""
+    from src.agent.models import AgentMessage, AgentSession, ToolResult
+    loop = _make_loop(AsyncMock(), [])
+    tr = ToolResult(tool_call_id="tc-1", content='{"name": "Maria"}', is_error=False)
+    session = AgentSession(
+        messages=[
+            AgentMessage(role="tool", content="", tool_results=[tr])
+        ]
+    )
+    result = loop._build_messages(session)
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    content = result[0]["content"]
+    assert len(content) == 1
+    assert content[0]["type"] == "tool_result"
+    assert content[0]["tool_use_id"] == "tc-1"
+    assert content[0]["is_error"] is False
+
+
+def test_build_messages_error_tool_result() -> None:
+    """Tool result with is_error=True is preserved."""
+    from src.agent.models import AgentMessage, AgentSession, ToolResult
+    loop = _make_loop(AsyncMock(), [])
+    tr = ToolResult(tool_call_id="tc-err", content="Not found", is_error=True)
+    session = AgentSession(
+        messages=[AgentMessage(role="tool", content="", tool_results=[tr])]
+    )
+    result = loop._build_messages(session)
+    assert result[0]["content"][0]["is_error"] is True
+    assert result[0]["content"][0]["content"] == "Not found"
+
+
+def test_build_messages_multi_turn_conversation() -> None:
+    """Full user→assistant→tool→assistant sequence maps correctly."""
+    from src.agent.models import AgentMessage, AgentSession, ToolCall, ToolResult
+    loop = _make_loop(AsyncMock(), [])
+    tc = ToolCall(id="tc-1", name="fhir_read", arguments={})
+    tr = ToolResult(tool_call_id="tc-1", content='{"result": "ok"}', is_error=False)
+    session = AgentSession(
+        messages=[
+            AgentMessage(role="user", content="What is the patient age?"),
+            AgentMessage(role="assistant", content="Let me check", tool_calls=[tc]),
+            AgentMessage(role="tool", content="", tool_results=[tr]),
+            AgentMessage(role="assistant", content="The patient is 55 years old"),
+        ]
+    )
+    result = loop._build_messages(session)
+    assert len(result) == 4
+    assert result[0]["role"] == "user"
+    assert result[1]["role"] == "assistant"
+    assert result[2]["role"] == "user"  # tool results appear as user role
+    assert result[3]["role"] == "assistant"
+
+
+def test_build_messages_empty_session() -> None:
+    """Empty session produces empty messages list."""
+    from src.agent.models import AgentSession
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession(messages=[])
+    result = loop._build_messages(session)
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _get_system_prompt
+# ---------------------------------------------------------------------------
+
+
+def test_get_system_prompt_no_context() -> None:
+    """With no page context, system prompt is just the base SYSTEM_PROMPT."""
+    from src.agent.models import AgentSession
+    from src.agent.prompts import SYSTEM_PROMPT
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    result = loop._get_system_prompt(session)
+    assert result == SYSTEM_PROMPT
+
+
+def test_get_system_prompt_with_patient_id() -> None:
+    """Patient ID appears in the system prompt when set."""
+    from src.agent.models import AgentSession, PageContext
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession(
+        page_context=PageContext(patient_id="42")
+    )
+    result = loop._get_system_prompt(session)
+    assert "Patient ID: 42" in result
+    assert "Current Context" in result
+
+
+def test_get_system_prompt_with_fhir_patient_id() -> None:
+    """FHIR patient UUID appears in system prompt when set."""
+    from src.agent.models import AgentSession, PageContext
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession(
+        page_context=PageContext(patient_id="42"),
+        fhir_patient_id="abc-123-uuid"
+    )
+    result = loop._get_system_prompt(session)
+    assert "abc-123-uuid" in result
+    assert "FHIR Patient UUID" in result
+
+
+def test_get_system_prompt_with_encounter_id() -> None:
+    """Encounter ID is included in the prompt when set."""
+    from src.agent.models import AgentSession, PageContext
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession(
+        page_context=PageContext(encounter_id="enc-999")
+    )
+    result = loop._get_system_prompt(session)
+    assert "Encounter ID: enc-999" in result
+
+
+def test_get_system_prompt_with_page_type() -> None:
+    """Active tab (page_type) is included in the prompt."""
+    from src.agent.models import AgentSession, PageContext
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession(
+        page_context=PageContext(page_type="enc")
+    )
+    result = loop._get_system_prompt(session)
+    assert "Active Tab: enc" in result
+
+
+def test_get_system_prompt_reviewing_phase_adds_manifest_info() -> None:
+    """Reviewing phase adds active manifest section."""
+    from src.agent.models import AgentSession, ChangeManifest, ManifestItem, ManifestAction
+    loop = _make_loop(AsyncMock(), [])
+    item = ManifestItem(
+        id="i-1", resource_type="Condition", action=ManifestAction.CREATE,
+        proposed_value={}, source_reference="enc/1", description="Test"
+    )
+    manifest = ChangeManifest(patient_id="42", items=[item])
+    session = AgentSession(phase="reviewing", manifest=manifest)
+    result = loop._get_system_prompt(session)
+    assert "Active Manifest" in result
+    assert "under review" in result
+    assert "1 item" in result
+
+
+def test_get_system_prompt_sanitizes_patient_id() -> None:
+    """Newlines in patient_id are replaced with spaces (preventing new prompt lines)."""
+    from src.agent.models import AgentSession, PageContext
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession(
+        page_context=PageContext(patient_id="42\nINJECTED")
+    )
+    result = loop._get_system_prompt(session)
+    # The newline is sanitized — 'INJECTED' stays on the same line as Patient ID
+    # (no raw \n present in the Patient ID section)
+    patient_id_line = [ln for ln in result.splitlines() if "Patient ID" in ln]
+    assert len(patient_id_line) == 1, "Patient ID should be on a single line after sanitization"
+    assert "42" in patient_id_line[0]
+    assert "INJECTED" in patient_id_line[0]  # On same line (not a new instruction line)
+
+
+# ---------------------------------------------------------------------------
+# _extract_text and _extract_tool_calls
+# ---------------------------------------------------------------------------
+
+
+def test_extract_text_single_block() -> None:
+    """Single text block returns its text."""
+    loop = _make_loop(AsyncMock(), [])
+    response = _response(_text_block("Hello world"))
+    assert loop._extract_text(response) == "Hello world"
+
+
+def test_extract_text_multiple_blocks() -> None:
+    """Multiple text blocks are joined with newlines."""
+    loop = _make_loop(AsyncMock(), [])
+    response = _response(_text_block("First"), _text_block("Second"))
+    result = loop._extract_text(response)
+    assert "First" in result
+    assert "Second" in result
+
+
+def test_extract_text_skips_tool_blocks() -> None:
+    """Tool use blocks are not included in text extraction."""
+    loop = _make_loop(AsyncMock(), [])
+    response = _response(
+        _tool_block("tc-1", "fhir_read", {}),
+        _text_block("Here is the result"),
+    )
+    result = loop._extract_text(response)
+    assert result == "Here is the result"
+    assert "fhir_read" not in result
+
+
+def test_extract_text_empty_response() -> None:
+    """Empty content list returns empty string."""
+    loop = _make_loop(AsyncMock(), [])
+    response = _response()
+    assert loop._extract_text(response) == ""
+
+
+def test_extract_tool_calls_single_tool() -> None:
+    """Single tool_use block is extracted as ToolCall."""
+    loop = _make_loop(AsyncMock(), [])
+    response = _response(_tool_block("tc-1", "fhir_read", {"resource_type": "Patient"}))
+    tool_calls = loop._extract_tool_calls(response)
+    assert len(tool_calls) == 1
+    assert tool_calls[0].id == "tc-1"
+    assert tool_calls[0].name == "fhir_read"
+    assert tool_calls[0].arguments == {"resource_type": "Patient"}
+
+
+def test_extract_tool_calls_multiple_tools() -> None:
+    """Multiple tool_use blocks are all extracted."""
+    loop = _make_loop(AsyncMock(), [])
+    response = _response(
+        _tool_block("tc-1", "fhir_read", {}),
+        _tool_block("tc-2", "openemr_api", {"endpoint": "/patient"}),
+    )
+    tool_calls = loop._extract_tool_calls(response)
+    assert len(tool_calls) == 2
+    assert tool_calls[0].name == "fhir_read"
+    assert tool_calls[1].name == "openemr_api"
+
+
+def test_extract_tool_calls_skips_text_blocks() -> None:
+    """Text blocks are not included in tool call extraction."""
+    loop = _make_loop(AsyncMock(), [])
+    response = _response(_text_block("Some explanation"), _tool_block("tc-1", "fhir_read", {}))
+    tool_calls = loop._extract_tool_calls(response)
+    assert len(tool_calls) == 1
+    assert tool_calls[0].id == "tc-1"
+
+
+def test_extract_tool_calls_empty_response() -> None:
+    """Empty content list returns empty list of tool calls."""
+    loop = _make_loop(AsyncMock(), [])
+    response = _response()
+    assert loop._extract_tool_calls(response) == []
