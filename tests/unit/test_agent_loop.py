@@ -594,3 +594,168 @@ async def test_open_patient_chart_updates_existing_page_context() -> None:
     assert not result.is_error
     assert session.page_context.patient_id == "9"
     assert session.page_context.page_type == "patient_summary"  # preserved
+
+
+# ---------------------------------------------------------------------------
+# _truncate_messages
+# ---------------------------------------------------------------------------
+
+
+def test_truncate_messages_short_conversation_unchanged() -> None:
+    """Fewer than 4 messages are returned unchanged."""
+    loop = _make_loop(AsyncMock(), [])
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"},
+    ]
+    result = loop._truncate_messages(messages)
+    assert result == messages
+
+
+def test_truncate_messages_preserves_first_user_message() -> None:
+    """First user message is always in the result."""
+    loop = _make_loop(AsyncMock(), [])
+    messages = [
+        {"role": "user", "content": "First user message"},
+        {"role": "assistant", "content": "Reply 1"},
+        {"role": "user", "content": "Second message"},
+        {"role": "assistant", "content": "Reply 2"},
+        {"role": "user", "content": "Third message"},
+        {"role": "assistant", "content": "Reply 3"},
+        {"role": "user", "content": "Fourth message"},
+    ]
+    result = loop._truncate_messages(messages)
+    assert result[0]["content"] == "First user message"
+    assert result[0]["role"] == "user"
+
+
+def test_truncate_messages_includes_truncation_note() -> None:
+    """When truncated, a summary note is included."""
+    loop = _make_loop(AsyncMock(), [])
+    messages = [{"role": "user", "content": f"msg {i}"} for i in range(20)]
+    messages += [{"role": "assistant", "content": f"reply {i}"} for i in range(20)]
+    result = loop._truncate_messages(messages)
+    has_note = any(
+        "summarized" in (m.get("content", "") or "")
+        for m in result
+    )
+    assert has_note, "Truncated messages should include a summary note"
+
+
+def test_truncate_messages_keeps_tail() -> None:
+    """Last 10 messages are preserved in tail."""
+    loop = _make_loop(AsyncMock(), [])
+    messages = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"msg {i}"}
+        for i in range(30)
+    ]
+    result = loop._truncate_messages(messages)
+    # The last message from the original should appear in result
+    assert messages[-1] in result
+
+
+# ---------------------------------------------------------------------------
+# _render_visible_data
+# ---------------------------------------------------------------------------
+
+
+def test_render_visible_data_simple_dict() -> None:
+    """Dict content is rendered with key: value format."""
+    loop = _make_loop(AsyncMock(), [])
+    result = loop._render_visible_data({"patient_info": {"name": "Maria", "dob": "1970-01-01"}})
+    assert "Patient Info" in result
+    assert "name: Maria" in result
+    assert "dob: 1970-01-01" in result
+
+
+def test_render_visible_data_list_content() -> None:
+    """List content renders each item as a bullet."""
+    loop = _make_loop(AsyncMock(), [])
+    result = loop._render_visible_data({
+        "conditions": [
+            {"code": "E11.9", "display": "Type 2 DM"},
+            {"code": "I10", "display": "Hypertension"},
+        ]
+    })
+    assert "Conditions" in result
+    assert "E11.9" in result
+    assert "Hypertension" in result
+
+
+def test_render_visible_data_string_content() -> None:
+    """String content is rendered as a quoted line."""
+    loop = _make_loop(AsyncMock(), [])
+    result = loop._render_visible_data({"note": "Patient is stable"})
+    assert "Note" in result
+    assert "Patient is stable" in result
+
+
+def test_render_visible_data_truncated_when_too_long() -> None:
+    """Very large input is truncated at 6000 chars."""
+    loop = _make_loop(AsyncMock(), [])
+    big_content = {"data": "x" * 10000}
+    result = loop._render_visible_data(big_content)
+    assert len(result) <= 6100  # some slack for truncation marker
+    assert "truncated" in result
+
+
+# ---------------------------------------------------------------------------
+# _topological_sort
+# ---------------------------------------------------------------------------
+
+
+def test_topological_sort_no_dependencies() -> None:
+    """Items with no dependencies are returned in original order."""
+    from src.agent.models import ManifestItem, ManifestAction
+    loop = _make_loop(AsyncMock(), [])
+    items = [
+        ManifestItem(id="a", resource_type="Condition", action=ManifestAction.CREATE,
+                     proposed_value={}, source_reference="enc/1", description="A"),
+        ManifestItem(id="b", resource_type="MedicationRequest", action=ManifestAction.CREATE,
+                     proposed_value={}, source_reference="enc/1", description="B"),
+    ]
+    result = loop._topological_sort(items)
+    assert [i.id for i in result] == ["a", "b"]
+
+
+def test_topological_sort_respects_dependency() -> None:
+    """Item with depends_on appears after the dependency."""
+    from src.agent.models import ManifestItem, ManifestAction
+    loop = _make_loop(AsyncMock(), [])
+    item_a = ManifestItem(id="a", resource_type="Condition", action=ManifestAction.CREATE,
+                          proposed_value={}, source_reference="enc/1", description="A")
+    item_b = ManifestItem(id="b", resource_type="Condition", action=ManifestAction.CREATE,
+                          proposed_value={}, source_reference="enc/1", description="B",
+                          depends_on=["a"])
+    result = loop._topological_sort([item_b, item_a])  # b before a in input
+    ids = [i.id for i in result]
+    assert ids.index("a") < ids.index("b"), "a should come before b (dependency)"
+
+
+def test_topological_sort_chain_dependency() -> None:
+    """Chain a→b→c is sorted correctly."""
+    from src.agent.models import ManifestItem, ManifestAction
+    loop = _make_loop(AsyncMock(), [])
+
+    def make_item(item_id: str, deps: list[str]) -> ManifestItem:
+        return ManifestItem(id=item_id, resource_type="Condition",
+                            action=ManifestAction.CREATE, proposed_value={},
+                            source_reference="enc/1", description=item_id,
+                            depends_on=deps)
+
+    items = [make_item("c", ["b"]), make_item("b", ["a"]), make_item("a", [])]
+    result = loop._topological_sort(items)
+    ids = [i.id for i in result]
+    assert ids.index("a") < ids.index("b") < ids.index("c")
+
+
+def test_topological_sort_handles_missing_dependency() -> None:
+    """Item referencing a non-existent dependency doesn't crash."""
+    from src.agent.models import ManifestItem, ManifestAction
+    loop = _make_loop(AsyncMock(), [])
+    item = ManifestItem(id="a", resource_type="Condition", action=ManifestAction.CREATE,
+                        proposed_value={}, source_reference="enc/1", description="A",
+                        depends_on=["nonexistent"])
+    result = loop._topological_sort([item])
+    assert len(result) == 1
+    assert result[0].id == "a"
