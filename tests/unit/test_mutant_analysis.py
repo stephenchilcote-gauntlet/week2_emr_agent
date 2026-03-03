@@ -432,3 +432,221 @@ def test_mutant_analyzer_custom_cmd() -> None:
     """MutantAnalyzer accepts a custom mutmut_cmd."""
     analyzer = MutantAnalyzer(mutmut_cmd=["python", "-m", "mutmut"])
     assert analyzer.mutmut_cmd == ["python", "-m", "mutmut"]
+
+
+# ---------------------------------------------------------------------------
+# ContextResolver — exception / out-of-range / class scope / AnnAssign
+# ---------------------------------------------------------------------------
+
+
+def test_context_resolver_nonexistent_file_returns_unknown_scope() -> None:
+    """resolve() on a missing file returns ScopeInfo with scope_type='unknown'."""
+    resolver = ContextResolver()
+    scope = resolver.resolve("/nonexistent/path/that/does/not/exist.py", 1)
+    assert scope.scope_type == "unknown"
+    assert scope.scope_name == "unknown"
+    assert scope.module_level_constant is False
+
+
+def test_context_resolver_line_out_of_range_returns_module_scope(tmp_path: Path) -> None:
+    """When line_number exceeds all nodes, _scope_path returns [] → module ScopeInfo."""
+    source = "x = 1\n"
+    file_path = tmp_path / "tiny.py"
+    file_path.write_text(source)
+
+    resolver = ContextResolver()
+    scope = resolver.resolve(str(file_path), 9999)
+    assert scope.scope_type == "module"
+    assert scope.scope_name == "<module>"
+
+
+def test_context_resolver_class_scope_detected(tmp_path: Path) -> None:
+    """Line inside a class body (but not a function) gets scope_type='class'."""
+    source = "class MyClass:\n    VALUE = 42\n"
+    file_path = tmp_path / "cls.py"
+    file_path.write_text(source)
+
+    resolver = ContextResolver()
+    scope = resolver.resolve(str(file_path), 2)
+    assert scope.scope_type == "class"
+    assert scope.scope_name == "MyClass"
+
+
+def test_context_resolver_annotated_constant_detected(tmp_path: Path) -> None:
+    """AnnAssign with an isupper() name at module level is a module-level constant."""
+    source = "CONST: int = 5\n\ndef run() -> None:\n    pass\n"
+    file_path = tmp_path / "annassign.py"
+    file_path.write_text(source)
+
+    resolver = ContextResolver()
+    scope = resolver.resolve(str(file_path), 1)
+    assert scope.scope_type == "module"
+    assert scope.module_level_constant is True
+
+
+def test_context_resolver_tree_cache_reuses_parsed_tree(tmp_path: Path) -> None:
+    """Second resolve() call for the same file returns cached tree (no re-read)."""
+    source = "X = 1\n"
+    file_path = tmp_path / "cached.py"
+    file_path.write_text(source)
+
+    resolver = ContextResolver()
+    resolver.resolve(str(file_path), 1)
+    assert str(file_path) in resolver._tree_cache
+
+    # Overwrite file — cache should prevent re-read so result is stable
+    file_path.write_text("import os\n")
+    scope = resolver.resolve(str(file_path), 1)
+    # Still uses cached tree (X=1 line), so module_level_constant is True
+    assert scope.module_level_constant is True
+
+
+def test_context_resolver_scope_path_bypasses_cache_when_missing(tmp_path: Path) -> None:
+    """_scope_path falls back to walking tree when node_cache entry is absent."""
+    source = "Y = 2\n"
+    file_path = tmp_path / "nocache.py"
+    file_path.write_text(source)
+
+    resolver = ContextResolver()
+    import ast as _ast
+    tree = _ast.parse(source)
+    # _node_cache intentionally not populated
+    path = resolver._scope_path(tree, str(file_path), 1)
+    # Should still return non-empty list (Assign node covers line 1)
+    assert len(path) > 0
+
+
+# ---------------------------------------------------------------------------
+# classify_mutant — module_level_constant=True but non-literal → MANUAL
+# ---------------------------------------------------------------------------
+
+
+def test_classify_mutant_module_constant_non_literal_falls_to_manual() -> None:
+    """module_level_constant=True but dict RHS is not a literal → MANUAL (no early NOISE return)."""
+    record = MutantRecord(
+        mutant_id=50,
+        status="survived",
+        filename="src/agent/config.py",
+        line_number=3,
+        source_line="DATA = {}",
+        mutation_index=0,
+    )
+    scope = ScopeInfo(
+        scope_type="module",
+        scope_name="<module>",
+        node_type="Assign",
+        module_level_constant=True,
+    )
+    classification, reasons = classify_mutant(
+        record, scope,
+        removed_line="DATA = {}",
+        added_line="DATA = {'x': 1}",
+    )
+    # _is_literal_assignment("DATA = {}") is False → no early NOISE return
+    # Falls through to MANUAL (none of the later checks match either)
+    assert classification == MANUAL
+    assert any("constant" in r for r in reasons)
+
+
+# ---------------------------------------------------------------------------
+# classify_mutant — _is_message_only_mutation path → NOISE
+# ---------------------------------------------------------------------------
+
+
+def test_classify_mutant_message_only_mutation_returns_noise() -> None:
+    """Logger message-string-only change is classified as NOISE."""
+    record = MutantRecord(
+        mutant_id=51,
+        status="survived",
+        filename="src/agent/loop.py",
+        line_number=100,
+        source_line="logger.info('Operation started')",
+        mutation_index=0,
+    )
+    scope = ScopeInfo(
+        scope_type="function",
+        scope_name="run",
+        node_type="Expr",
+        module_level_constant=False,
+    )
+    classification, reasons = classify_mutant(
+        record, scope,
+        removed_line="logger.info('Operation started')",
+        added_line="logger.info('Operation completed')",
+    )
+    assert classification == NOISE
+    assert any("message" in r or "log" in r for r in reasons)
+
+
+# ---------------------------------------------------------------------------
+# classify_mutant — node_type in MUST_FIX set → MUST_FIX (non-If variant)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_mutant_node_type_compare_returns_must_fix() -> None:
+    """node_type='Compare' triggers the MUST_FIX set check."""
+    record = MutantRecord(
+        mutant_id=52,
+        status="survived",
+        filename="src/verification/checks.py",
+        line_number=80,
+        source_line="count == 0",
+        mutation_index=0,
+    )
+    scope = ScopeInfo(
+        scope_type="function",
+        scope_name="validate",
+        node_type="Compare",
+        module_level_constant=False,
+    )
+    classification, _reasons = classify_mutant(
+        record, scope,
+        removed_line="count == 0",
+        added_line="count != 0",
+    )
+    assert classification == MUST_FIX
+
+
+# ---------------------------------------------------------------------------
+# MutantAnalyzer._show_mutation — non-zero exit raises RuntimeError
+# ---------------------------------------------------------------------------
+
+
+def test_mutant_analyzer_show_mutation_nonzero_exit_raises() -> None:
+    """_show_mutation raises RuntimeError when mutmut show exits non-zero."""
+    from unittest.mock import patch, MagicMock
+
+    analyzer = MutantAnalyzer(mutmut_cmd=["false"])
+    mock_proc = MagicMock()
+    mock_proc.returncode = 1
+    mock_proc.stderr = "mutmut error: not found"
+
+    with patch("subprocess.run", return_value=mock_proc):
+        with pytest.raises(RuntimeError, match="mutmut show"):
+            analyzer._show_mutation(42)
+
+
+# ---------------------------------------------------------------------------
+# build_parser — --output and --mutmut-cmd arguments
+# ---------------------------------------------------------------------------
+
+
+def test_build_parser_output_default() -> None:
+    """build_parser --output defaults to 'mutant-analysis.json'."""
+    parser = build_parser()
+    args = parser.parse_args([])
+    assert args.output == "mutant-analysis.json"
+
+
+def test_build_parser_accepts_output_path() -> None:
+    """build_parser accepts --output /tmp/report.json."""
+    parser = build_parser()
+    args = parser.parse_args(["--output", "/tmp/report.json"])
+    assert args.output == "/tmp/report.json"
+
+
+def test_build_parser_accepts_mutmut_cmd() -> None:
+    """build_parser accepts --mutmut-cmd argument."""
+    parser = build_parser()
+    args = parser.parse_args(["--mutmut-cmd", "python -m mutmut"])
+    assert "mutmut" in args.mutmut_cmd
