@@ -425,3 +425,75 @@ def test_trace_verification_sync_success() -> None:
 
     result = sync_check()
     assert result.passed is False
+
+
+# ---------------------------------------------------------------------------
+# _set_verification_attributes — empty results list
+# ---------------------------------------------------------------------------
+
+
+def test_set_verification_attributes_empty_results_list_sets_zero_count() -> None:
+    """Object with results=[] sets verification.item_count=0."""
+    class VerResult:
+        passed = True
+        results: list = []
+
+    span = MockSpan()
+    _set_verification_attributes(span, VerResult())
+
+    assert span.attributes["verification.passed"] is True
+    assert span.attributes["verification.item_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# _set_llm_attributes — usage attribute exists but is None
+# ---------------------------------------------------------------------------
+
+
+def test_set_llm_attributes_with_usage_none_skips_token_attributes() -> None:
+    """Object with model and usage=None → tokens are not set (falsy usage)."""
+    class LLMResult:
+        model = "claude-3"
+        usage = None  # attribute exists but is None
+
+    span = MockSpan()
+    _set_llm_attributes(span, LLMResult(), latency_ms=15.0)
+
+    assert span.attributes["llm.model"] == "claude-3"
+    assert span.attributes["llm.latency_ms"] == 15.0
+    assert "llm.input_tokens" not in span.attributes
+    assert "llm.output_tokens" not in span.attributes
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_tool_args — nested disallowed dict with no allowed keys → omitted
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_tool_args_nested_disallowed_dict_all_private_omitted() -> None:
+    """A nested dict under a non-allowed key with no allowed sub-keys is omitted."""
+    payload = {
+        "note": {              # "note" not in ALLOWED_TRACE_KEYS
+            "detail": "secret",  # "detail" not in ALLOWED_TRACE_KEYS
+            "text": "also secret",  # "text" not in ALLOWED_TRACE_KEYS
+        }
+    }
+    result = _sanitize_tool_args(payload)
+    # Nested dict produces empty dict → falsy → not included
+    assert "note" not in result
+    assert result == {}
+
+
+def test_sanitize_tool_args_nested_disallowed_dict_with_one_allowed_key_included() -> None:
+    """A nested dict under non-allowed key is included if it has at least one allowed sub-key."""
+    payload = {
+        "meta": {               # "meta" not in ALLOWED_TRACE_KEYS
+            "resource_type": "Patient",  # allowed
+            "secret": "not allowed",
+        }
+    }
+    result = _sanitize_tool_args(payload)
+    # "meta" is included because nested dict has an allowed key
+    assert "meta" in result
+    assert result["meta"]["resource_type"] == "Patient"
+    assert "secret" not in result["meta"]

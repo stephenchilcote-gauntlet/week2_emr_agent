@@ -293,6 +293,15 @@ class TestRefResourceTypeResolution:
         assert items[0].resource_type == "MedicationRequest"
         assert items[0].ref == "MedReq/789"
 
+    def test_edit_ref_without_slash_uses_full_ref_as_resource_type(self):
+        """ref without a '/' uses the full ref string as resource_type (parts[0])."""
+        xml = '<edit ref="Condition" dose="200mg" src="Encounter/1">Update</edit>'
+        items = parse_manifest_dsl(xml)
+        assert len(items) == 1
+        assert items[0].resource_type == "Condition"
+        assert items[0].ref == "Condition"
+        assert items[0].action == "edit"
+
 
 class TestDslItemDataclass:
     def test_dataclass_fields(self):
