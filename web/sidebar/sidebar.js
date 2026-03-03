@@ -184,6 +184,7 @@ class SidebarApp {
       verificationResults: null,
       verificationPassed: null,
       manifestOpenemrPid: null,
+      isExecuting: false,
     }
 
     this.abortController = null
@@ -505,7 +506,7 @@ class SidebarApp {
         this.renderMessage(message.role, message.content || "", null)
       }
 
-      this.state.pendingManifest = data.manifest || null
+      this.state.pendingManifest = null  // don't re-surface stale manifests on history load
       this.state.manifestOpenemrPid = data.openemr_pid || null
       this.state.tourIndex = 0
       this.state.tourCardHeight = 0
@@ -1158,7 +1159,7 @@ class SidebarApp {
   }
 
   async executeManifest() {
-    if (!this.state.pendingManifest) {
+    if (!this.state.pendingManifest || this.state.isExecuting) {
       return
     }
     const approved = this.state.pendingManifest.items.filter((item) => item.status === "approved")
@@ -1169,7 +1170,9 @@ class SidebarApp {
       return
     }
 
+    this.state.isExecuting = true
     this.setStatus("executing")
+    this.el.executeButton.disabled = true
     this.toggleSend(false)
     try {
       const data = await this.api(`/api/manifest/${this.state.sessionID}/execute`, { method: "POST" })
@@ -1192,6 +1195,7 @@ class SidebarApp {
       this.renderErrorBlock(`Execution failed: ${error.message}`)
       this.setStatus("error")
     } finally {
+      this.state.isExecuting = false
       this.toggleSend(true)
     }
   }
