@@ -1498,3 +1498,200 @@ def test_truncate_messages_no_user_message_uses_index_zero() -> None:
     # First message should be preserved (index 0, since no user msg found)
     assert result[0] == {"role": "assistant", "content": "Hello"}
     assert len(result) >= 3  # first + note + tail
+
+
+# ---------------------------------------------------------------------------
+# _build_manifest — legacy JSON list format (raw_items is a list)
+# ---------------------------------------------------------------------------
+
+
+def test_build_manifest_legacy_json_list_format() -> None:
+    """_build_manifest accepts raw_items as a list of dicts (legacy JSON format)."""
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    session.fhir_patient_id = "patient-fhir-1"
+
+    raw_items = [
+        {
+            "id": "leg-1",
+            "resource_type": "Condition",
+            "action": "create",
+            "proposed_value": {"code": "E11.9"},
+            "source_reference": "Encounter/enc-1",
+            "description": "Add diabetes",
+        }
+    ]
+    manifest = loop._build_manifest({"items": raw_items}, session)
+
+    assert len(manifest.items) == 1
+    item = manifest.items[0]
+    assert item.id == "leg-1"
+    assert item.resource_type == "Condition"
+    assert item.action.value == "create"
+    assert item.proposed_value == {"code": "E11.9"}
+    assert item.description == "Add diabetes"
+
+
+def test_build_manifest_legacy_json_with_current_value() -> None:
+    """Legacy JSON items with current_value are preserved on the ManifestItem."""
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    session.fhir_patient_id = "patient-fhir-1"
+
+    raw_items = [
+        {
+            "resource_type": "Condition",
+            "action": "update",
+            "proposed_value": {"status": "inactive"},
+            "current_value": {"status": "active", "code": "I10"},
+            "source_reference": "Encounter/enc-1",
+            "description": "Resolve hypertension",
+        }
+    ]
+    manifest = loop._build_manifest({"items": raw_items}, session)
+
+    assert len(manifest.items) == 1
+    item = manifest.items[0]
+    assert item.current_value == {"status": "active", "code": "I10"}
+    assert item.action.value == "update"
+
+
+def test_build_manifest_legacy_json_uses_id_when_provided() -> None:
+    """Legacy JSON item with explicit id field uses that id."""
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    session.fhir_patient_id = "patient-fhir-1"
+
+    raw_items = [
+        {
+            "id": "explicit-id-123",
+            "resource_type": "MedicationRequest",
+            "action": "create",
+            "proposed_value": {"drug": "Metformin"},
+            "source_reference": "Encounter/enc-1",
+            "description": "Add medication",
+        }
+    ]
+    manifest = loop._build_manifest({"items": raw_items}, session)
+
+    assert manifest.items[0].id == "explicit-id-123"
+
+
+# ---------------------------------------------------------------------------
+# _build_manifest — patient_id fallback to page_context
+# ---------------------------------------------------------------------------
+
+
+def test_build_manifest_patient_id_from_page_context_fallback() -> None:
+    """When session has no fhir_patient_id, uses page_context.patient_id."""
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    assert session.fhir_patient_id is None
+    session.page_context = PageContext(patient_id="pid-from-ctx")
+
+    dsl = '<add type="Condition" code="I10" src="Encounter/enc-1" id="c1">HTN</add>'
+    manifest = loop._build_manifest({"items": dsl}, session)
+
+    assert manifest.patient_id == "pid-from-ctx"
+
+
+def test_build_manifest_encounter_id_from_arguments() -> None:
+    """encounter_id in arguments takes precedence over page_context.encounter_id."""
+    loop = _make_loop(AsyncMock(), [])
+    session = AgentSession()
+    session.fhir_patient_id = "pat-1"
+    session.page_context = PageContext(patient_id="pid-1", encounter_id="ctx-enc")
+
+    dsl = '<add type="Condition" code="I10" src="Encounter/enc-1" id="c1">HTN</add>'
+    manifest = loop._build_manifest(
+        {"items": dsl, "encounter_id": "arg-enc-456"}, session
+    )
+
+    assert manifest.encounter_id == "arg-enc-456"
+
+
+# ---------------------------------------------------------------------------
+# open_patient_chart — edge cases: no given names, no birthDate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_open_patient_chart_patient_with_no_given_name() -> None:
+    """Patient with only family name (no given) yields patient_name=family."""
+    openemr_client = AsyncMock()
+    openemr_client.fhir_read = AsyncMock(return_value={
+        "resourceType": "Bundle",
+        "type": "searchset",
+        "total": 1,
+        "entry": [{"resource": {
+            "resourceType": "Patient",
+            "id": "fam-only-uuid",
+            "identifier": [{"type": {"coding": [{"code": "PT"}]}, "value": "20"}],
+            "name": [{"family": "Smith"}],  # No "given" key
+            "birthDate": "1970-01-01",
+        }}],
+    })
+    loop = _make_loop(openemr_client, [])
+    session = AgentSession()
+
+    tc = ToolCall(id="t1", name="open_patient_chart", arguments={"patient_uuid": "fam-only-uuid"})
+    result = await loop._execute_tool(tc, session)
+
+    parsed = json.loads(result.content)
+    assert not result.is_error
+    assert parsed["patient_name"] == "Smith"
+    assert session.navigate_to_patient["pname"] == "Smith"
+
+
+@pytest.mark.asyncio
+async def test_open_patient_chart_patient_without_birth_date() -> None:
+    """Patient resource without birthDate results in dob='' in navigate_to_patient."""
+    openemr_client = AsyncMock()
+    openemr_client.fhir_read = AsyncMock(return_value={
+        "resourceType": "Bundle",
+        "type": "searchset",
+        "total": 1,
+        "entry": [{"resource": {
+            "resourceType": "Patient",
+            "id": "no-dob-uuid",
+            "identifier": [{"type": {"coding": [{"code": "PT"}]}, "value": "21"}],
+            "name": [{"given": ["Alice"], "family": "Wonder"}],
+            # No "birthDate" field
+        }}],
+    })
+    loop = _make_loop(openemr_client, [])
+    session = AgentSession()
+
+    tc = ToolCall(id="t1", name="open_patient_chart", arguments={"patient_uuid": "no-dob-uuid"})
+    result = await loop._execute_tool(tc, session)
+
+    parsed = json.loads(result.content)
+    assert not result.is_error
+    assert parsed["patient_name"] == "Alice Wonder"
+    assert session.navigate_to_patient["dob"] == ""
+
+
+@pytest.mark.asyncio
+async def test_open_patient_chart_patient_with_empty_names_list() -> None:
+    """Patient with empty name list yields patient_name='' (empty string)."""
+    openemr_client = AsyncMock()
+    openemr_client.fhir_read = AsyncMock(return_value={
+        "resourceType": "Bundle",
+        "type": "searchset",
+        "total": 1,
+        "entry": [{"resource": {
+            "resourceType": "Patient",
+            "id": "no-name-uuid",
+            "identifier": [{"type": {"coding": [{"code": "PT"}]}, "value": "22"}],
+            "name": [],  # Empty names list
+        }}],
+    })
+    loop = _make_loop(openemr_client, [])
+    session = AgentSession()
+
+    tc = ToolCall(id="t1", name="open_patient_chart", arguments={"patient_uuid": "no-name-uuid"})
+    result = await loop._execute_tool(tc, session)
+
+    parsed = json.loads(result.content)
+    assert not result.is_error
+    assert parsed["patient_name"] == ""

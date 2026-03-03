@@ -1388,3 +1388,120 @@ def test_session_summary_patient_id_none_when_no_page_context() -> None:
     # Sessions without page_context should have null patient_id
     no_ctx_sessions = [s for s in sessions if s.get("patient_id") is None]
     assert len(no_ctx_sessions) >= 1
+
+
+# ------------------------------------------------------------------
+# approve_manifest — non-dict proposed_value filtered out
+# ------------------------------------------------------------------
+
+
+def test_approve_manifest_non_dict_proposed_value_is_filtered() -> None:
+    """modified_items with proposed_value that is not a dict are ignored."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        client.app.state.openemr_client = SimpleNamespace(
+            get_fhir_metadata=AsyncMock(return_value={}),
+            fhir_read=AsyncMock(return_value={"resourceType": "Bundle", "total": 0, "entry": []}),
+        )
+        created = client.post("/api/sessions", headers=_headers("u-non-dict")).json()
+        session = _ephemeral_sessions[created["session_id"]]
+        original_proposed = {"code": "E11.9"}
+        session.manifest = ChangeManifest(
+            patient_id=PATIENT_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="nd-item-1",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value=original_proposed,
+                    source_reference="Encounter/enc-1",
+                    description="diabetes",
+                )
+            ],
+        )
+        client.app.state.session_store.save(session)
+
+        # proposed_value is a list — should be filtered out (not a dict)
+        response = client.post(
+            f"/api/manifest/{session.id}/approve",
+            headers=_headers("u-non-dict"),
+            json={
+                "approved_items": ["nd-item-1"],
+                "modified_items": [
+                    {"id": "nd-item-1", "proposed_value": ["I10", "Hypertension"]}
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        updated = client.app.state.session_store.load(session.id, "u-non-dict")
+
+    # Since proposed_value was not a dict, the modification is ignored;
+    # the item keeps its original proposed_value
+    assert updated.manifest is not None
+    assert updated.manifest.items[0].proposed_value == original_proposed
+
+
+# ------------------------------------------------------------------
+# approve_manifest — mixed approval/rejection/pending
+# ------------------------------------------------------------------
+
+
+def test_approve_manifest_mixed_items_sets_pending_for_unreviewed() -> None:
+    """Items not in approved_items or rejected_items get status='pending'."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        client.app.state.openemr_client = SimpleNamespace(
+            get_fhir_metadata=AsyncMock(return_value={}),
+            fhir_read=AsyncMock(return_value={"resourceType": "Bundle", "total": 0, "entry": []}),
+        )
+        created = client.post("/api/sessions", headers=_headers("u-mixed")).json()
+        session = _ephemeral_sessions[created["session_id"]]
+        session.manifest = ChangeManifest(
+            patient_id=PATIENT_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="mix-item-1",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "E11.9"},
+                    source_reference="Encounter/enc-1",
+                    description="diabetes",
+                ),
+                ManifestItem(
+                    id="mix-item-2",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "I10"},
+                    source_reference="Encounter/enc-1",
+                    description="hypertension",
+                ),
+                ManifestItem(
+                    id="mix-item-3",
+                    resource_type="MedicationRequest",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"drug": "Aspirin"},
+                    source_reference="Encounter/enc-1",
+                    description="aspirin",
+                ),
+            ],
+        )
+        client.app.state.session_store.save(session)
+
+        response = client.post(
+            f"/api/manifest/{session.id}/approve",
+            headers=_headers("u-mixed"),
+            json={
+                "approved_items": ["mix-item-1"],
+                "rejected_items": ["mix-item-2"],
+                # mix-item-3 is neither approved nor rejected → "pending"
+            },
+        )
+
+        assert response.status_code == 200
+        updated = client.app.state.session_store.load(session.id, "u-mixed")
+
+    items_by_id = {i.id: i for i in updated.manifest.items}
+    assert items_by_id["mix-item-1"].status == "approved"
+    assert items_by_id["mix-item-2"].status == "rejected"
+    assert items_by_id["mix-item-3"].status == "pending"
