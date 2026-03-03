@@ -1,10 +1,26 @@
 from __future__ import annotations
 
+import pytest
+
 from src.agent.prompts import SYSTEM_PROMPT, TOOL_DEFINITIONS
+
+EXPECTED_TOOLS = {
+    "fhir_read",
+    "openemr_api",
+    "get_page_context",
+    "submit_manifest",
+    "send_developer_feedback",
+    "open_patient_chart",
+}
 
 
 def _tool(name: str) -> dict:
     return next(defn for defn in TOOL_DEFINITIONS if defn["name"] == name)
+
+
+# ---------------------------------------------------------------------------
+# System prompt content guards
+# ---------------------------------------------------------------------------
 
 
 def test_system_prompt_has_injection_defense_and_refusal_list() -> None:
@@ -14,8 +30,102 @@ def test_system_prompt_has_injection_defense_and_refusal_list() -> None:
     assert "system prompts" in SYSTEM_PROMPT
 
 
+def test_system_prompt_references_writable_types() -> None:
+    """Prompt names all writable resource types."""
+    for rtype in ("Condition", "MedicationRequest", "AllergyIntolerance", "SoapNote"):
+        assert rtype in SYSTEM_PROMPT, f"Missing writable type {rtype!r} in SYSTEM_PROMPT"
+
+
+def test_system_prompt_forbids_document_reference() -> None:
+    """Prompt explicitly marks DocumentReference as read-only."""
+    assert "DocumentReference" in SYSTEM_PROMPT
+    # DocumentReference appears in the read-only list near the writable types section
+    idx_writable = SYSTEM_PROMPT.index("Writable resource types")
+    # Find the occurrence of DocumentReference that appears AFTER the writable types section
+    doc_ref_positions = [
+        i for i in range(len(SYSTEM_PROMPT))
+        if SYSTEM_PROMPT[i:i + len("DocumentReference")] == "DocumentReference"
+    ]
+    assert any(pos > idx_writable for pos in doc_ref_positions), (
+        "DocumentReference should appear in or after the writable types section as read-only"
+    )
+
+
+def test_system_prompt_has_soap_note_instruction() -> None:
+    """Prompt instructs to use SoapNote, not DocumentReference for notes."""
+    assert "SoapNote" in SYSTEM_PROMPT
+
+
+def test_system_prompt_instructs_fhir_read_before_write() -> None:
+    """Prompt requires looking up existing data before writing."""
+    assert "fhir_read" in SYSTEM_PROMPT
+    assert "submit_manifest" in SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Tool definitions structure
+# ---------------------------------------------------------------------------
+
+
+def test_all_expected_tools_defined() -> None:
+    """All expected tool names are present in TOOL_DEFINITIONS."""
+    names = {t["name"] for t in TOOL_DEFINITIONS}
+    for name in EXPECTED_TOOLS:
+        assert name in names, f"Missing tool: {name!r}"
+
+
+def test_no_extra_tools_defined() -> None:
+    """TOOL_DEFINITIONS contains exactly the expected tools (no extras)."""
+    names = {t["name"] for t in TOOL_DEFINITIONS}
+    assert names == EXPECTED_TOOLS, (
+        f"Unexpected tools: {names - EXPECTED_TOOLS}; missing: {EXPECTED_TOOLS - names}"
+    )
+
+
+def test_all_tools_have_required_fields() -> None:
+    """Every tool definition has name, description, and input_schema."""
+    for tool in TOOL_DEFINITIONS:
+        assert "name" in tool, f"Missing 'name' in tool: {tool}"
+        assert "description" in tool, f"Missing 'description' in {tool['name']}"
+        assert "input_schema" in tool, f"Missing 'input_schema' in {tool['name']}"
+        assert isinstance(tool["description"], str) and len(tool["description"]) > 10, (
+            f"Tool {tool['name']} has empty/short description"
+        )
+
+
+def test_all_input_schemas_have_type_object() -> None:
+    """All input schemas are type: object (JSON Schema convention)."""
+    for tool in TOOL_DEFINITIONS:
+        schema = tool["input_schema"]
+        assert schema.get("type") == "object", (
+            f"Tool {tool['name']} input_schema type should be 'object', got {schema.get('type')!r}"
+        )
+
+
+@pytest.mark.parametrize("tool_name,required_param", [
+    ("fhir_read", "resource_type"),
+    ("openemr_api", "endpoint"),
+    ("submit_manifest", "items"),
+    ("send_developer_feedback", "category"),
+    ("open_patient_chart", "patient_uuid"),
+])
+def test_tool_required_params(tool_name: str, required_param: str) -> None:
+    """Each tool's required params include the critical parameter."""
+    tool = _tool(tool_name)
+    required = tool["input_schema"].get("required", [])
+    assert required_param in required, (
+        f"Tool {tool_name!r} should require '{required_param}', got: {required}"
+    )
+
+
 def test_fhir_read_warns_about_summary_count() -> None:
     assert "_summary=count" in _tool("fhir_read")["description"]
+
+
+def test_fhir_read_schema_has_params_property() -> None:
+    """fhir_read accepts optional params dict."""
+    schema = _tool("fhir_read")["input_schema"]
+    assert "params" in schema["properties"], "fhir_read should accept 'params' argument"
 
 
 def test_submit_manifest_schema_accepts_item_ids() -> None:
@@ -24,3 +134,16 @@ def test_submit_manifest_schema_accepts_item_ids() -> None:
     required = array_variant["items"]["required"]
     assert "id" in required
     assert "depends_on" in array_variant["items"]["properties"]
+
+
+def test_submit_manifest_schema_has_items_property() -> None:
+    """submit_manifest input schema has an items property (the core manifest content)."""
+    tool = _tool("submit_manifest")
+    assert "items" in tool["input_schema"]["properties"]
+
+
+def test_open_patient_chart_has_patient_uuid() -> None:
+    """open_patient_chart tool requires patient_uuid parameter."""
+    tool = _tool("open_patient_chart")
+    assert "patient_uuid" in tool["input_schema"]["properties"]
+    assert "patient_uuid" in tool["input_schema"].get("required", [])
