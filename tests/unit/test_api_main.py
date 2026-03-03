@@ -278,17 +278,18 @@ def test_sidebar_ui_routes_are_served() -> None:
 
 
 def test_chat_resolves_pid_to_fhir_uuid_using_identifier_param() -> None:
-    """The chat endpoint must use FHIR 'identifier' (not '_id') to resolve
-    an internal OpenEMR pid to a FHIR UUID.  _id expects a UUID and would
-    fail silently when given a pid like '5'."""
-    fhir_read_mock = AsyncMock(return_value={
-        "entry": [{"resource": {"resourceType": "Patient", "id": PATIENT_FHIR_UUID}}],
+    """The chat endpoint resolves a pid to a FHIR UUID by scanning the REST
+    patient list (api_call('patient')), not via FHIR identifier search.
+    This is required because seed patients only have SSN identifiers, not PT."""
+    api_call_mock = AsyncMock(return_value={
+        "data": [{"pid": PATIENT_PID, "uuid": PATIENT_FHIR_UUID}],
     })
     with TestClient(app) as client:
         client.app.state.agent_loop = _DummyAgentLoop()
         client.app.state.openemr_client = SimpleNamespace(
             get_fhir_metadata=AsyncMock(return_value={}),
-            fhir_read=fhir_read_mock,
+            api_call=api_call_mock,
+            fhir_read=AsyncMock(return_value={}),
         )
 
         resp = client.post(
@@ -301,18 +302,19 @@ def test_chat_resolves_pid_to_fhir_uuid_using_identifier_param() -> None:
         )
 
     assert resp.status_code == 200
-    fhir_read_mock.assert_awaited_once_with("Patient", {"identifier": PATIENT_PID})
+    api_call_mock.assert_awaited_once_with("patient")
 
 
 def test_chat_sets_fhir_patient_id() -> None:
-    """After resolving a pid, the session must have fhir_patient_id set."""
+    """After resolving a pid via REST scan, the session must have fhir_patient_id set."""
     with TestClient(app) as client:
         client.app.state.agent_loop = _DummyAgentLoop()
         client.app.state.openemr_client = SimpleNamespace(
             get_fhir_metadata=AsyncMock(return_value={}),
-            fhir_read=AsyncMock(return_value={
-                "entry": [{"resource": {"resourceType": "Patient", "id": PATIENT_FHIR_UUID}}],
+            api_call=AsyncMock(return_value={
+                "data": [{"pid": PATIENT_PID, "uuid": PATIENT_FHIR_UUID}],
             }),
+            fhir_read=AsyncMock(return_value={}),
         )
 
         resp = client.post(
@@ -334,18 +336,19 @@ def test_chat_sets_fhir_patient_id() -> None:
 
 def test_chat_skips_patient_lookup_when_fhir_id_already_set() -> None:
     """Once fhir_patient_id is set, subsequent chat calls should NOT
-    re-resolve the patient — avoids redundant FHIR calls."""
-    fhir_read_mock = AsyncMock(return_value={
-        "entry": [{"resource": {"resourceType": "Patient", "id": PATIENT_FHIR_UUID}}],
+    re-resolve the patient — avoids redundant REST API calls."""
+    api_call_mock = AsyncMock(return_value={
+        "data": [{"pid": PATIENT_PID, "uuid": PATIENT_FHIR_UUID}],
     })
     with TestClient(app) as client:
         client.app.state.agent_loop = _DummyAgentLoop()
         client.app.state.openemr_client = SimpleNamespace(
             get_fhir_metadata=AsyncMock(return_value={}),
-            fhir_read=fhir_read_mock,
+            api_call=api_call_mock,
+            fhir_read=AsyncMock(return_value={}),
         )
 
-        # First call — should resolve
+        # First call — should resolve via api_call
         resp1 = client.post(
             "/api/chat",
             headers=_headers("u-skip"),
@@ -356,8 +359,8 @@ def test_chat_skips_patient_lookup_when_fhir_id_already_set() -> None:
         )
         session_id = resp1.json()["session_id"]
 
-        # Second call — should NOT resolve again
-        fhir_read_mock.reset_mock()
+        # Second call — should NOT call api_call again
+        api_call_mock.reset_mock()
         resp2 = client.post(
             "/api/chat",
             headers=_headers("u-skip"),
@@ -369,7 +372,7 @@ def test_chat_skips_patient_lookup_when_fhir_id_already_set() -> None:
         )
 
     assert resp2.status_code == 200
-    fhir_read_mock.assert_not_awaited()
+    api_call_mock.assert_not_awaited()
 
 
 def test_health_check_returns_ok_when_connected() -> None:
@@ -527,12 +530,15 @@ def test_chat_returns_502_on_llm_api_error() -> None:
 
 
 def test_chat_handles_empty_patient_search_gracefully() -> None:
-    """If FHIR search returns no entries for a pid, fhir_patient_id
-    should remain None — no crash, no garbage data."""
+    """If REST patient scan and FHIR name fallback both return nothing for a pid,
+    fhir_patient_id should remain None — no crash, no garbage data."""
     with TestClient(app) as client:
         client.app.state.agent_loop = _DummyAgentLoop()
         client.app.state.openemr_client = SimpleNamespace(
             get_fhir_metadata=AsyncMock(return_value={}),
+            # REST scan returns empty list (no patient with pid 999)
+            api_call=AsyncMock(return_value={"data": []}),
+            # FHIR name fallback also returns nothing (no visible_data.patient_name)
             fhir_read=AsyncMock(return_value={"entry": []}),
         )
 
@@ -551,3 +557,600 @@ def test_chat_handles_empty_patient_search_gracefully() -> None:
 
     assert session is not None
     assert session.fhir_patient_id is None
+
+
+# ------------------------------------------------------------------
+# DELETE /api/sessions/{session_id}
+# ------------------------------------------------------------------
+
+
+def test_delete_session_returns_204() -> None:
+    """Deleting a session returns 204 No Content."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        # Chat first to persist the session
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-del"),
+            json={"message": "hello"},
+        )
+        sid = resp.json()["session_id"]
+
+        delete_resp = client.delete(
+            f"/api/sessions/{sid}",
+            headers=_headers("u-del"),
+        )
+
+    assert delete_resp.status_code == 204
+
+
+def test_delete_session_makes_it_unfetchable() -> None:
+    """After deletion, the session is no longer accessible."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-del2"),
+            json={"message": "hello"},
+        )
+        sid = resp.json()["session_id"]
+
+        client.delete(f"/api/sessions/{sid}", headers=_headers("u-del2"))
+
+        # After deletion, GET messages should return 404
+        messages_resp = client.get(
+            f"/api/sessions/{sid}/messages",
+            headers=_headers("u-del2"),
+        )
+
+    assert messages_resp.status_code == 404
+
+
+def test_delete_session_wrong_user_returns_404() -> None:
+    """Deleting another user's session returns 404 (no info leakage)."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-owner"),
+            json={"message": "hello"},
+        )
+        sid = resp.json()["session_id"]
+
+        delete_resp = client.delete(
+            f"/api/sessions/{sid}",
+            headers=_headers("u-attacker"),
+        )
+
+    assert delete_resp.status_code == 404
+
+
+def test_delete_nonexistent_session_returns_404() -> None:
+    """Deleting a session that doesn't exist returns 404."""
+    with TestClient(app) as client:
+        resp = client.delete(
+            "/api/sessions/does-not-exist",
+            headers=_headers("u-any"),
+        )
+    assert resp.status_code == 404
+
+
+# ------------------------------------------------------------------
+# GET /api/sessions/{session_id}/messages
+# ------------------------------------------------------------------
+
+
+def test_get_session_messages_returns_messages() -> None:
+    """GET /messages returns all messages in the session."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-msgs"),
+            json={"message": "hello"},
+        )
+        sid = resp.json()["session_id"]
+
+        msgs_resp = client.get(
+            f"/api/sessions/{sid}/messages",
+            headers=_headers("u-msgs"),
+        )
+
+    assert msgs_resp.status_code == 200
+    body = msgs_resp.json()
+    assert body["session_id"] == sid
+    assert isinstance(body["messages"], list)
+    assert len(body["messages"]) >= 1
+    # DummyAgentLoop appends: "echo: hello" as assistant
+    assert any(m["role"] == "assistant" for m in body["messages"])
+    assert "phase" in body
+
+
+def test_get_session_messages_wrong_user_returns_404() -> None:
+    """GET /messages for another user's session returns 404."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-msg-own"),
+            json={"message": "hello"},
+        )
+        sid = resp.json()["session_id"]
+
+        msgs_resp = client.get(
+            f"/api/sessions/{sid}/messages",
+            headers=_headers("u-msg-other"),
+        )
+
+    assert msgs_resp.status_code == 404
+
+
+def test_get_session_messages_includes_manifest_when_present() -> None:
+    """GET /messages includes the current manifest in the response body."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-msg-mf")).json()
+        session = _ephemeral_sessions[created["session_id"]]
+        session.manifest = ChangeManifest(
+            patient_id=PATIENT_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="m-1",
+                    resource_type="AllergyIntolerance",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"substance": "Penicillin"},
+                    source_reference="Encounter/aaa",
+                    description="Allergy",
+                )
+            ],
+        )
+        # Persist so it's loadable
+        client.app.state.session_store.save(session)
+
+        msgs_resp = client.get(
+            f"/api/sessions/{session.id}/messages",
+            headers=_headers("u-msg-mf"),
+        )
+
+    assert msgs_resp.status_code == 200
+    body = msgs_resp.json()
+    assert body["manifest"] is not None
+    assert len(body["manifest"]["items"]) == 1
+
+
+# ------------------------------------------------------------------
+# POST /api/manifest/{session_id}/execute
+# ------------------------------------------------------------------
+
+
+def test_execute_manifest_marks_approved_items_completed() -> None:
+    """Executing a manifest with approved items marks them 'completed'."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _ToolCallingAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-exec")).json()
+        session = _ephemeral_sessions[created["session_id"]]
+        session.manifest = ChangeManifest(
+            patient_id=PATIENT_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="e-1",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "E11.9"},
+                    source_reference="Encounter/abc",
+                    description="Diabetes",
+                    status="approved",
+                )
+            ],
+        )
+        client.app.state.session_store.save(session)
+
+        resp = client.post(
+            f"/api/manifest/{session.id}/execute",
+            headers=_headers("u-exec"),
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_id"] == session.id
+    assert body["manifest_status"] == "completed"
+    assert len(body["items"]) == 1
+    assert body["items"][0]["id"] == "e-1"
+    assert body["items"][0]["status"] == "completed"
+    assert body["items"][0]["resource_type"] == "Condition"
+
+
+def test_execute_manifest_without_manifest_returns_400() -> None:
+    """Attempting to execute when there is no manifest returns 400."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-exec-no")).json()
+        # Persist without manifest
+        session = _ephemeral_sessions[created["session_id"]]
+        client.app.state.session_store.save(session)
+
+        resp = client.post(
+            f"/api/manifest/{session.id}/execute",
+            headers=_headers("u-exec-no"),
+        )
+
+    assert resp.status_code == 400
+    assert "No manifest" in resp.json()["detail"]
+
+
+def test_execute_manifest_returns_409_when_already_executing() -> None:
+    """Attempting to execute an already-executing manifest returns 409."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-exec-dup")).json()
+        session = _ephemeral_sessions[created["session_id"]]
+        session.manifest = ChangeManifest(
+            patient_id=PATIENT_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="dup-1",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "I10"},
+                    source_reference="Encounter/abc",
+                    description="Hypertension",
+                    status="approved",
+                )
+            ],
+        )
+        # Mark manifest as already completed
+        session.manifest.status = "completed"
+        client.app.state.session_store.save(session)
+
+        resp = client.post(
+            f"/api/manifest/{session.id}/execute",
+            headers=_headers("u-exec-dup"),
+        )
+
+    assert resp.status_code == 409
+    assert "completed" in resp.json()["detail"]
+
+
+def test_execute_manifest_wrong_user_returns_404() -> None:
+    """Executing another user's manifest returns 404."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _ToolCallingAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-exec-own")).json()
+        session = _ephemeral_sessions[created["session_id"]]
+        session.manifest = ChangeManifest(
+            patient_id=PATIENT_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="x-1",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={},
+                    source_reference="Encounter/abc",
+                    description="test",
+                    status="approved",
+                )
+            ],
+        )
+        client.app.state.session_store.save(session)
+
+        resp = client.post(
+            f"/api/manifest/{session.id}/execute",
+            headers=_headers("u-exec-bad"),
+        )
+
+    assert resp.status_code == 404
+
+
+# ------------------------------------------------------------------
+# POST /api/sessions/{session_id}/feedback
+# ------------------------------------------------------------------
+
+
+def test_feedback_returns_204() -> None:
+    """Feedback endpoint returns 204 No Content."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-fb"),
+            json={"message": "hello"},
+        )
+        sid = resp.json()["session_id"]
+
+        fb_resp = client.post(
+            f"/api/sessions/{sid}/feedback",
+            headers=_headers("u-fb"),
+            json={"message_index": 0, "rating": "up"},
+        )
+
+    assert fb_resp.status_code == 204
+
+
+def test_feedback_records_audit_event() -> None:
+    """Feedback submission creates an audit event with rating and index."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-fb2"),
+            json={"message": "hello"},
+        )
+        sid = resp.json()["session_id"]
+
+        client.post(
+            f"/api/sessions/{sid}/feedback",
+            headers=_headers("u-fb2"),
+            json={"message_index": 1, "rating": "down"},
+        )
+
+        audit_resp = client.get(
+            f"/api/sessions/{sid}/audit",
+            headers=_headers("u-fb2"),
+        )
+
+    events = audit_resp.json()
+    fb_events = [e for e in events if e["event_type"] == "message_feedback"]
+    assert len(fb_events) == 1
+    assert fb_events[0]["details"]["rating"] == "down"
+    assert fb_events[0]["details"]["message_index"] == 1
+
+
+def test_feedback_wrong_user_returns_404() -> None:
+    """Feedback for another user's session returns 404."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-fb-own"),
+            json={"message": "hello"},
+        )
+        sid = resp.json()["session_id"]
+
+        fb_resp = client.post(
+            f"/api/sessions/{sid}/feedback",
+            headers=_headers("u-fb-other"),
+            json={"message_index": 0, "rating": "up"},
+        )
+
+    assert fb_resp.status_code == 404
+
+
+# ------------------------------------------------------------------
+# Manifest approval edge cases
+# ------------------------------------------------------------------
+
+
+def test_approve_all_rejected_clears_manifest() -> None:
+    """When all items are rejected, the manifest is cleared so the agent
+    can propose new changes."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        client.app.state.openemr_client = SimpleNamespace(
+            get_fhir_metadata=AsyncMock(return_value={}),
+        )
+        created = client.post("/api/sessions", headers=_headers("u-rej")).json()
+        session = _ephemeral_sessions[created["session_id"]]
+        session.manifest = ChangeManifest(
+            patient_id=PATIENT_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="r-1",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "I10"},
+                    source_reference="Encounter/abc",
+                    description="Hypertension",
+                )
+            ],
+        )
+        client.app.state.session_store.save(session)
+
+        resp = client.post(
+            f"/api/manifest/{session.id}/approve",
+            headers=_headers("u-rej"),
+            json={"rejected_items": ["r-1"]},
+        )
+
+        updated = client.app.state.session_store.load(session.id, "u-rej")
+
+    assert resp.status_code == 200
+    assert resp.json()["passed"] is True
+    # Manifest should be cleared after full rejection
+    assert updated is not None
+    assert updated.manifest is None
+    assert updated.phase == "planning"
+
+
+def test_approve_manifest_returns_409_when_already_completed() -> None:
+    """Approving a manifest that's already 'completed' returns 409."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-dup-appr")).json()
+        session = _ephemeral_sessions[created["session_id"]]
+        session.manifest = ChangeManifest(
+            patient_id=PATIENT_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="dup-a-1",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "I10"},
+                    source_reference="Encounter/abc",
+                    description="test",
+                )
+            ],
+        )
+        session.manifest.status = "completed"
+        client.app.state.session_store.save(session)
+
+        resp = client.post(
+            f"/api/manifest/{session.id}/approve",
+            headers=_headers("u-dup-appr"),
+            json={"approved_items": ["dup-a-1"]},
+        )
+
+    assert resp.status_code == 409
+    assert "completed" in resp.json()["detail"]
+
+
+# ------------------------------------------------------------------
+# Patient resolution via REST fallback name search
+# ------------------------------------------------------------------
+
+
+def test_chat_falls_back_to_fhir_name_search_when_rest_scan_misses() -> None:
+    """If REST scan returns no match for the pid, the code falls back to
+    FHIR name search using the patient_name from visible_data."""
+    fhir_read_mock = AsyncMock(return_value={
+        "entry": [{"resource": {"resourceType": "Patient", "id": PATIENT_FHIR_UUID}}],
+    })
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        client.app.state.openemr_client = SimpleNamespace(
+            get_fhir_metadata=AsyncMock(return_value={}),
+            # REST scan: no patient with pid 999
+            api_call=AsyncMock(return_value={"data": []}),
+            fhir_read=fhir_read_mock,
+        )
+
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-fallback"),
+            json={
+                "message": "hello",
+                "page_context": {
+                    "patient_id": "999",
+                    "visible_data": {"patient_name": "Maria Santos"},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        session_id = resp.json()["session_id"]
+        session = client.app.state.session_store.load(session_id, "u-fallback")
+
+    # FHIR fallback should have been called with "Santos" (last name token)
+    fhir_read_mock.assert_awaited_once_with(
+        "Patient", {"name": "Santos", "_count": "5"}
+    )
+    assert session is not None
+    assert session.fhir_patient_id == PATIENT_FHIR_UUID
+
+
+def test_chat_fhir_patient_id_not_set_when_no_pid_in_context() -> None:
+    """If no patient_id is in page_context, no patient resolution runs."""
+    api_call_mock = AsyncMock(return_value={"data": []})
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        client.app.state.openemr_client = SimpleNamespace(
+            get_fhir_metadata=AsyncMock(return_value={}),
+            api_call=api_call_mock,
+            fhir_read=AsyncMock(return_value={}),
+        )
+
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-nopid"),
+            json={"message": "general question"},  # no page_context
+        )
+
+    assert resp.status_code == 200
+    # api_call should NOT have been called (no patient_id in context)
+    api_call_mock.assert_not_awaited()
+
+
+# ------------------------------------------------------------------
+# GET /api/fhir/metadata
+# ------------------------------------------------------------------
+
+
+def test_fhir_metadata_endpoint_proxies_to_openemr() -> None:
+    """GET /api/fhir/metadata returns FHIR capability statement from OpenEMR."""
+    capability = {"resourceType": "CapabilityStatement", "fhirVersion": "4.0.1"}
+    with TestClient(app) as client:
+        client.app.state.openemr_client = SimpleNamespace(
+            get_fhir_metadata=AsyncMock(return_value=capability),
+        )
+        resp = client.get("/api/fhir/metadata")
+
+    assert resp.status_code == 200
+    assert resp.json()["resourceType"] == "CapabilityStatement"
+    assert resp.json()["fhirVersion"] == "4.0.1"
+
+
+# ------------------------------------------------------------------
+# Session summary preview truncation
+# ------------------------------------------------------------------
+
+
+def test_session_summary_preview_truncated_at_60_chars() -> None:
+    """The first_message_preview in session summaries is at most 60 chars."""
+    long_message = "A" * 200  # 200 character message
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        client.post(
+            "/api/chat",
+            headers=_headers("u-trunc"),
+            json={"message": long_message},
+        )
+        sessions = client.get("/api/sessions", headers=_headers("u-trunc")).json()
+
+    assert len(sessions) >= 1
+    preview = sessions[0]["first_message_preview"]
+    assert len(preview) <= 60, f"Preview should be at most 60 chars, got {len(preview)}"
+
+
+# ------------------------------------------------------------------
+# Navigate-to-patient in ChatResponse
+# ------------------------------------------------------------------
+
+
+def test_chat_response_includes_navigate_to_patient_when_set() -> None:
+    """When agent sets navigate_to_patient, it appears in ChatResponse once."""
+    class _NavigateAgentLoop:
+        async def run(self, session: AgentSession, user_message: str) -> AgentSession:
+            session.messages.append(AgentMessage(role="assistant", content="Opening chart"))
+            session.navigate_to_patient = {"pid": "42", "name": "Jane Doe"}
+            return session
+
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _NavigateAgentLoop()
+        resp = client.post(
+            "/api/chat",
+            headers=_headers("u-nav"),
+            json={"message": "open chart for Jane Doe"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["navigate_to_patient"] is not None
+    assert body["navigate_to_patient"]["pid"] == "42"
+
+
+def test_chat_response_navigate_to_patient_is_consumed() -> None:
+    """navigate_to_patient is a one-shot signal — cleared after first response."""
+    class _NavigateAgentLoop:
+        _called = False
+
+        async def run(self, session: AgentSession, user_message: str) -> AgentSession:
+            session.messages.append(AgentMessage(role="assistant", content="done"))
+            if not self._called:
+                session.navigate_to_patient = {"pid": "42"}
+                self.__class__._called = True
+            return session
+
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _NavigateAgentLoop()
+        resp1 = client.post(
+            "/api/chat", headers=_headers("u-nav2"), json={"message": "open chart"},
+        )
+        sid = resp1.json()["session_id"]
+
+        # Second message — navigate_to_patient should NOT be in the response again
+        resp2 = client.post(
+            "/api/chat",
+            headers=_headers("u-nav2"),
+            json={"session_id": sid, "message": "follow up"},
+        )
+
+    assert resp1.json()["navigate_to_patient"] is not None
+    assert resp2.json()["navigate_to_patient"] is None

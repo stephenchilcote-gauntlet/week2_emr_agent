@@ -237,9 +237,11 @@ class TestManifestValidation:
             ],
         )
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "failed"
         assert "No REST write path" in item.execution_result
 
@@ -268,9 +270,11 @@ class TestManifestValidation:
             ],
         )
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "failed"
         assert "no target resource ID" in item.execution_result
 
@@ -298,9 +302,11 @@ class TestManifestValidation:
             ],
         )
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "failed"
         assert "no target resource ID" in item.execution_result
 
@@ -335,6 +341,8 @@ class TestManifestValidation:
                 ),
             ],
         )
+
+        manifest_items = session.manifest.items
 
         session = await loop.execute_approved(session)
 

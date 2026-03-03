@@ -154,6 +154,10 @@ class TestResourceTypeAliases:
             "ServiceRequest",
             "SoapNote",
             "Vital",
+            # Newer supported types:
+            "Appointment",
+            "Referral",
+            "Surgery",
         }
         for alias, resolved in _TYPE_ALIASES.items():
             assert resolved in known_types, f"Alias '{alias}' -> '{resolved}' unknown"

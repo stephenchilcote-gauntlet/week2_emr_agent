@@ -103,9 +103,11 @@ class TestMedicationTitleMerge:
         )
         loop = _make_loop(client)
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed", f"Expected completed, got {item.status}: {item.execution_result}"
 
         # Verify the PUT payload had the merged title
@@ -122,9 +124,11 @@ class TestMedicationTitleMerge:
         )
         loop = _make_loop(client)
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed", f"Expected completed, got {item.status}: {item.execution_result}"
 
         put_call = client.api_call.call_args_list[1]
@@ -141,9 +145,11 @@ class TestMedicationTitleMerge:
         )
         loop = _make_loop(client)
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed", f"Expected completed, got {item.status}: {item.execution_result}"
 
         put_call = client.api_call.call_args_list[1]
@@ -164,9 +170,11 @@ class TestMedicationTitleMerge:
         )
         loop = _make_loop(client)
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed"
 
         put_call = client.api_call.call_args_list[1]
@@ -187,9 +195,11 @@ class TestMedicationTitleMerge:
         )
         loop = _make_loop(client)
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed"
 
         put_call = client.api_call.call_args_list[1]
@@ -207,9 +217,11 @@ class TestMedicationTitleMerge:
         )
         loop = _make_loop(client)
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed"
 
         put_call = client.api_call.call_args_list[1]

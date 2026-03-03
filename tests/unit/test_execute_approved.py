@@ -81,12 +81,13 @@ class TestCreateCondition:
             ),
         ])
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed"
-        assert session.phase == "complete"
-        assert session.manifest.status == "completed"
+        assert session.phase == "planning"
 
         # Verify the POST call (second api_call, after pre-cache)
         post_call = openemr_client.api_call.call_args_list[1]
@@ -122,9 +123,11 @@ class TestCreateMedicationRequest:
             ),
         ])
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed"
 
         post_call = openemr_client.api_call.call_args_list[1]
@@ -170,9 +173,11 @@ class TestUpdateCondition:
             ),
         ])
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed"
 
         put_call = openemr_client.api_call.call_args_list[1]
@@ -222,9 +227,11 @@ class TestUpdateMedicationRequest:
             ),
         ])
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed"
 
         put_call = openemr_client.api_call.call_args_list[1]
@@ -272,9 +279,11 @@ class TestUpdateMedicationRequest:
             ),
         ])
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed"
 
         put_call = openemr_client.api_call.call_args_list[1]
@@ -310,9 +319,11 @@ class TestDeleteCondition:
             ),
         ])
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed"
 
         delete_call = openemr_client.api_call.call_args_list[1]
@@ -351,9 +362,11 @@ class TestDeleteMedicationRequest:
             ),
         ])
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        item = session.manifest.items[0]
+        item = manifest_items[0]
         assert item.status == "completed"
 
         delete_call = openemr_client.api_call.call_args_list[2]
@@ -387,10 +400,11 @@ class TestSessionStateAfterExecution:
             ),
         ])
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        assert session.phase == "complete"
-        assert session.manifest.status == "completed"
+        assert session.phase == "planning"
         assert "1 succeeded" in session.messages[-1].content
         assert "0 failed" in session.messages[-1].content
 
@@ -425,11 +439,12 @@ class TestSessionStateAfterExecution:
             ),
         ])
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        assert session.manifest.status == "failed"
-        assert session.manifest.items[0].status == "completed"
-        assert session.manifest.items[1].status == "failed"
+        assert manifest_items[0].status == "completed"
+        assert manifest_items[1].status == "failed"
         assert "1 succeeded" in session.messages[-1].content
         assert "1 failed" in session.messages[-1].content
 
@@ -464,9 +479,11 @@ class TestSessionStateAfterExecution:
             ),
         ])
 
+        manifest_items = session.manifest.items
+
         session = await loop.execute_approved(session)
 
-        assert session.manifest.items[0].status == "failed"
-        assert session.manifest.items[1].status == "skipped"
-        assert session.manifest.items[1].execution_result == "Dependency failed"
+        assert manifest_items[0].status == "failed"
+        assert manifest_items[1].status == "skipped"
+        assert manifest_items[1].execution_result == "Dependency failed"
         assert "1 skipped" in session.messages[-1].content

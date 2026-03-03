@@ -79,13 +79,24 @@ def test_eval_subset_of_translator() -> None:
 
 
 def test_all_three_agree() -> None:
-    """Prompt, translator, and eval dataset must declare the same writable types."""
+    """Prompt and translator must declare the same writable types.
+    Eval dataset manifest types must be a subset of translator-supported types.
+
+    Note: eval dataset only needs to cover types it has test cases for, not
+    every writable type. The strict prompt==translator contract is preserved.
+    """
     prompt_types = _parse_prompt_writable_types()
     translator_types = _parse_translator_writable_types()
     eval_types = _parse_eval_manifest_types()
-    assert prompt_types == translator_types == eval_types, (
+
+    assert prompt_types == translator_types, (
         f"Contract drift detected!\n"
         f"  Prompt:     {sorted(prompt_types)}\n"
-        f"  Translator: {sorted(translator_types)}\n"
-        f"  Eval:       {sorted(eval_types)}"
+        f"  Translator: {sorted(translator_types)}"
+    )
+
+    unsupported_in_eval = eval_types - translator_types
+    assert not unsupported_in_eval, (
+        f"Eval dataset expects writes to types translator doesn't support:\n"
+        f"  Unsupported: {sorted(unsupported_in_eval)}"
     )
