@@ -1154,3 +1154,160 @@ def test_chat_response_navigate_to_patient_is_consumed() -> None:
 
     assert resp1.json()["navigate_to_patient"] is not None
     assert resp2.json()["navigate_to_patient"] is None
+
+
+# ------------------------------------------------------------------
+# Session summary uses 'name' key as fallback for patient_name
+# ------------------------------------------------------------------
+
+
+def test_session_summary_uses_name_key_as_patient_name_fallback() -> None:
+    """visible_data 'name' key is used as patient_name when 'patient_name' is absent."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        client.post(
+            "/api/chat",
+            headers=_headers("u-name-key"),
+            json={
+                "message": "hello",
+                "page_context": {
+                    "patient_id": "77",
+                    "visible_data": {"name": "John Smith"},  # uses 'name' not 'patient_name'
+                },
+            },
+        )
+        sessions = client.get("/api/sessions?patient_id=77", headers=_headers("u-name-key")).json()
+
+    assert len(sessions) >= 1
+    assert sessions[0]["patient_name"] == "John Smith"
+
+
+# ------------------------------------------------------------------
+# POST /api/sessions returns valid structure
+# ------------------------------------------------------------------
+
+
+def test_create_session_returns_session_id_and_phase() -> None:
+    """POST /api/sessions returns session_id and planning phase."""
+    with TestClient(app) as client:
+        resp = client.post("/api/sessions", headers=_headers("u-create"))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "session_id" in body
+    assert len(body["session_id"]) > 0
+    assert body["phase"] == "planning"
+
+
+def test_create_session_requires_auth() -> None:
+    """POST /api/sessions returns 401 without auth header."""
+    with TestClient(app) as client:
+        resp = client.post("/api/sessions")  # no headers
+
+    assert resp.status_code == 401
+
+
+# ------------------------------------------------------------------
+# GET messages includes openemr_pid when set
+# ------------------------------------------------------------------
+
+
+def test_get_session_messages_includes_openemr_pid() -> None:
+    """GET /messages response includes openemr_pid from session."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-pid-msg")).json()
+        session = _ephemeral_sessions[created["session_id"]]
+        session.openemr_pid = "42"
+
+        msgs = client.get(
+            f"/api/sessions/{created['session_id']}/messages",
+            headers=_headers("u-pid-msg"),
+        ).json()
+
+    assert msgs["openemr_pid"] == "42"
+
+
+# ------------------------------------------------------------------
+# Execute manifest skips rejected items
+# ------------------------------------------------------------------
+
+
+def test_execute_manifest_rejected_items_shown_with_rejected_status() -> None:
+    """Items with status='rejected' are included in response with rejected status (not executed)."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _ToolCallingAgentLoop()
+        created = client.post("/api/sessions", headers=_headers("u-reject-exec")).json()
+        session = _ephemeral_sessions[created["session_id"]]
+        session.phase = "reviewing"
+        session.manifest = ChangeManifest(
+            patient_id=PATIENT_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="approved-item",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "E11.9"},
+                    source_reference="Encounter/aaa",
+                    description="Add diabetes",
+                    status="approved",
+                ),
+                ManifestItem(
+                    id="rejected-item",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "I10"},
+                    source_reference="Encounter/aaa",
+                    description="Add hypertension",
+                    status="rejected",
+                ),
+            ],
+        )
+
+        resp = client.post(
+            f"/api/manifest/{created['session_id']}/execute",
+            headers=_headers("u-reject-exec"),
+        )
+
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    # Both items appear; rejected keeps its status
+    item_map = {i["id"]: i for i in items}
+    assert "approved-item" in item_map
+    assert "rejected-item" in item_map
+    assert item_map["rejected-item"]["status"] == "rejected"
+
+
+# ------------------------------------------------------------------
+# Session list returns correct metadata fields
+# ------------------------------------------------------------------
+
+
+def test_session_list_response_has_expected_fields() -> None:
+    """GET /api/sessions returns all expected metadata fields."""
+    with TestClient(app) as client:
+        client.app.state.agent_loop = _DummyAgentLoop()
+        client.post(
+            "/api/chat",
+            headers=_headers("u-list-fields"),
+            json={"message": "hello there"},
+        )
+        sessions = client.get("/api/sessions", headers=_headers("u-list-fields")).json()
+
+    assert len(sessions) >= 1
+    session = sessions[0]
+    assert "session_id" in session
+    assert "phase" in session
+    assert "message_count" in session
+    assert "created_at" in session
+    assert "first_message_preview" in session
+    assert "patient_name" in session
+    assert "patient_id" in session
+
+
+def test_session_list_empty_when_no_sessions() -> None:
+    """GET /api/sessions returns empty list for a user with no sessions."""
+    with TestClient(app) as client:
+        sessions = client.get("/api/sessions", headers=_headers("u-empty-list")).json()
+
+    assert sessions == []
