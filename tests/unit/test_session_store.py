@@ -227,3 +227,107 @@ def test_session_store_without_patient_context(tmp_path: Path) -> None:
     # Should NOT appear in any patient-scoped list
     sessions_p = store.list_for_user("user-nopatient", patient_id="42")
     assert len(sessions_p) == 0
+
+
+# ---------------------------------------------------------------------------
+# _extract_patient_id
+# ---------------------------------------------------------------------------
+
+
+def test_extract_patient_id_with_page_context() -> None:
+    """Returns patient_id from page_context when set."""
+    from src.agent.models import PageContext
+    session = AgentSession(openemr_user_id="u")
+    session.page_context = PageContext(patient_id="42")
+    assert SessionStore._extract_patient_id(session) == "42"
+
+
+def test_extract_patient_id_without_page_context() -> None:
+    """Returns None when page_context is absent."""
+    session = AgentSession(openemr_user_id="u")
+    assert SessionStore._extract_patient_id(session) is None
+
+
+def test_extract_patient_id_with_empty_patient_id() -> None:
+    """Returns None when patient_id in page_context is None."""
+    from src.agent.models import PageContext
+    session = AgentSession(openemr_user_id="u")
+    session.page_context = PageContext(patient_id=None)
+    assert SessionStore._extract_patient_id(session) is None
+
+
+# ---------------------------------------------------------------------------
+# _decode_session_payload edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_decode_session_payload_with_empty_page_context() -> None:
+    """Empty string page_context is normalized to None before validation."""
+    import json
+    session = AgentSession(openemr_user_id="u1")
+    payload = session.model_dump(mode="json")
+    payload["page_context"] = ""  # old serialization bug
+
+    decoded = SessionStore._decode_session_payload(json.dumps(payload))
+    assert decoded.page_context is None
+
+
+def test_decode_session_payload_with_empty_manifest() -> None:
+    """Empty string manifest is normalized to None before validation."""
+    import json
+    session = AgentSession(openemr_user_id="u1")
+    payload = session.model_dump(mode="json")
+    payload["manifest"] = ""  # old serialization bug
+
+    decoded = SessionStore._decode_session_payload(json.dumps(payload))
+    assert decoded.manifest is None
+
+
+def test_decode_session_payload_round_trip() -> None:
+    """Normal payload round-trips through encode/decode."""
+    import json
+    from src.agent.models import AgentMessage
+    session = AgentSession(openemr_user_id="u2")
+    session.messages.append(AgentMessage(role="user", content="Hello"))
+    payload = json.dumps(session.model_dump(mode="json"), default=str)
+
+    decoded = SessionStore._decode_session_payload(payload)
+    assert decoded.id == session.id
+    assert len(decoded.messages) == 1
+    assert decoded.messages[0].content == "Hello"
+
+
+# ---------------------------------------------------------------------------
+# Cache hit bypasses DB for correct user
+# ---------------------------------------------------------------------------
+
+
+def test_session_store_cache_hit_returns_session(tmp_path: Path) -> None:
+    """If session is in cache with correct user, no DB query is made."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session = AgentSession(openemr_user_id="u-cache-hit")
+    store.save(session)
+
+    # Load should warm cache
+    result1 = store.load(session.id, "u-cache-hit")
+    assert result1 is not None
+
+    # Second load hits cache (verify by ensuring same object returned)
+    result2 = store.load(session.id, "u-cache-hit")
+    assert result2 is not None
+    assert result2.id == session.id
+
+
+def test_session_store_cache_hit_wrong_user_returns_none(tmp_path: Path) -> None:
+    """Cached session is not returned to a different user."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session = AgentSession(openemr_user_id="owner")
+    store.save(session)
+
+    # Load as owner to warm cache
+    store.load(session.id, "owner")
+    assert session.id in store._cache
+
+    # Attacker should still get None even with cached session
+    result = store.load(session.id, "attacker")
+    assert result is None

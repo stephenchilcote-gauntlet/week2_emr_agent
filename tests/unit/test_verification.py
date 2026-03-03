@@ -8,7 +8,9 @@ from src.agent.models import ChangeManifest, ManifestAction, ManifestItem
 from src.verification.checks import (
     VerificationReport,
     VerificationResult,
+    _extract_allergen_name,
     _extract_code,
+    _extract_medication_name,
     _normalize_for_conflict,
     check_confidence,
     check_conflict,
@@ -939,3 +941,129 @@ class TestAllergyConflictRealisticFHIR:
         # Should not crash regardless of whether it detects the conflict
         results = await check_medication_safety(item, mock_openemr_client, "patient-123")
         assert isinstance(results, list)
+
+
+# ------------------------------------------------------------------
+# _extract_medication_name helper
+# ------------------------------------------------------------------
+
+
+class TestExtractMedicationName:
+    def test_returns_coding_display(self) -> None:
+        resource = {
+            "medicationCodeableConcept": {
+                "coding": [{"display": "Metformin 500mg", "system": "http://rxnav.nlm.nih.gov/"}]
+            }
+        }
+        assert _extract_medication_name(resource) == "Metformin 500mg"
+
+    def test_falls_back_to_text(self) -> None:
+        resource = {
+            "medicationCodeableConcept": {
+                "coding": [{"system": "http://rxnav.nlm.nih.gov/"}],  # no display
+                "text": "Metformin 500mg oral tablet",
+            }
+        }
+        assert _extract_medication_name(resource) == "Metformin 500mg oral tablet"
+
+    def test_falls_back_to_drug_field(self) -> None:
+        resource = {"drug": "Lisinopril"}
+        assert _extract_medication_name(resource) == "Lisinopril"
+
+    def test_falls_back_to_title_field(self) -> None:
+        resource = {"title": "Atorvastatin 20mg"}
+        assert _extract_medication_name(resource) == "Atorvastatin 20mg"
+
+    def test_falls_back_to_display_field(self) -> None:
+        resource = {"display": "Aspirin 81mg"}
+        assert _extract_medication_name(resource) == "Aspirin 81mg"
+
+    def test_returns_empty_string_for_unknown(self) -> None:
+        resource = {}
+        assert _extract_medication_name(resource) == ""
+
+    def test_skips_coding_without_display(self) -> None:
+        """Coding entries with no display field are skipped."""
+        resource = {
+            "medicationCodeableConcept": {
+                "coding": [{"code": "860975", "system": "http://rxnav.nlm.nih.gov/"}],
+                "text": "Metformin",
+            }
+        }
+        assert _extract_medication_name(resource) == "Metformin"
+
+
+# ------------------------------------------------------------------
+# _extract_allergen_name helper
+# ------------------------------------------------------------------
+
+
+class TestExtractAllergenName:
+    def test_returns_coding_display(self) -> None:
+        resource = {
+            "code": {
+                "coding": [{"display": "Penicillin G"}]
+            }
+        }
+        assert _extract_allergen_name(resource) == "Penicillin G"
+
+    def test_skips_unknown_display(self) -> None:
+        """'unknown' display is skipped and falls back to text."""
+        resource = {
+            "code": {
+                "coding": [{"display": "Unknown"}],
+                "text": "Amoxicillin",
+            }
+        }
+        assert _extract_allergen_name(resource) == "Amoxicillin"
+
+    def test_falls_back_to_text(self) -> None:
+        resource = {
+            "code": {
+                "coding": [],
+                "text": "Sulfonamides",
+            }
+        }
+        assert _extract_allergen_name(resource) == "Sulfonamides"
+
+    def test_falls_back_to_substance_field(self) -> None:
+        resource = {"substance": "Latex"}
+        assert _extract_allergen_name(resource) == "Latex"
+
+    def test_falls_back_to_display_field(self) -> None:
+        resource = {"display": "NSAIDs"}
+        assert _extract_allergen_name(resource) == "NSAIDs"
+
+    def test_returns_empty_string_for_unknown(self) -> None:
+        resource = {}
+        assert _extract_allergen_name(resource) == ""
+
+    def test_code_not_a_dict(self) -> None:
+        """If 'code' is not a dict, fall back to substance/display."""
+        resource = {"code": "Penicillin", "substance": "penicillin_fallback"}
+        assert _extract_allergen_name(resource) == "penicillin_fallback"
+
+
+# ------------------------------------------------------------------
+# _extract_code edge cases
+# ------------------------------------------------------------------
+
+
+class TestExtractCodeExtended:
+    def test_string_passthrough(self) -> None:
+        assert _extract_code("E11.9") == "E11.9"
+
+    def test_none_returns_none(self) -> None:
+        assert _extract_code(None) is None
+
+    def test_integer_returns_none(self) -> None:
+        assert _extract_code(42) is None
+
+    def test_coding_list_first_code_returned(self) -> None:
+        assert _extract_code({"coding": [{"code": "I10"}, {"code": "I11"}]}) == "I10"
+
+    def test_coding_list_with_non_dict_entries_skipped(self) -> None:
+        assert _extract_code({"coding": ["not-a-dict", {"code": "E11.9"}]}) == "E11.9"
+
+    def test_empty_dict_returns_none(self) -> None:
+        assert _extract_code({}) is None
