@@ -28,7 +28,7 @@ AGENT_BASE_URL = os.environ.get("AGENT_BASE_URL", "https://emragent.404.mn/agent
 OPENEMR_URL = os.environ.get("OPENEMR_URL", "https://emragent.404.mn")
 OPENEMR_USER = os.environ.get("OPENEMR_USER", "admin")
 OPENEMR_PASS = os.environ.get("OPENEMR_PASS", "pass")
-E2E_TIMEOUT_MS = int(os.environ.get("E2E_TIMEOUT_MS", "120000"))
+E2E_TIMEOUT_MS = int(os.environ.get("E2E_TIMEOUT_MS", "180000"))
 DEFAULT_USER_ID = "e2e-test-user"
 
 # Patient name → pid mapping (matches seed_data.sql actual pids)

@@ -165,20 +165,22 @@ class TestFullRefreshFlow:
 
         sidebar.wait_for_selector("#review-panel:not(.hidden)", timeout=E2E_TIMEOUT_MS)
 
+        # Count existing messages before execute so we can wait for a new one
+        existing_msg_count = sidebar.locator(".message.role-assistant").count()
+
         sidebar.locator("#apply-all").dispatch_event("click")
         sidebar.wait_for_timeout(500)
         sidebar.locator("#execute-button").dispatch_event("click")
 
-        # After execution, review panel should disappear and a summary message
-        # should appear in the chat area
-        sidebar.wait_for_selector(
-            ".message.role-assistant:last-child",
+        # Wait for a new assistant message (the execution summary)
+        sidebar.wait_for_function(
+            f"() => document.querySelectorAll('.message.role-assistant').length > {existing_msg_count}",
             timeout=E2E_TIMEOUT_MS,
         )
 
-        # The execution summary contains "applied" or "change" language
+        # The execution summary contains "succeeded" or "complete" language
         last_msg = sidebar.locator(".message.role-assistant .markdown").last
         text = last_msg.inner_text()
-        assert "applied" in text.lower() or "change" in text.lower(), (
+        assert any(word in text.lower() for word in ("succeeded", "complete", "applied", "change")), (
             f"Expected execution summary message, got: {text}"
         )

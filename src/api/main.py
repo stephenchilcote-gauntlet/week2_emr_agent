@@ -479,6 +479,7 @@ async def execute_manifest(
             {
                 "id": item.id,
                 "status": item.status,
+                "resource_type": item.resource_type,
                 "execution_result": item.execution_result,
             }
             for item in manifest_items
