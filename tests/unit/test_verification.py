@@ -1067,3 +1067,206 @@ class TestExtractCodeExtended:
 
     def test_empty_dict_returns_none(self) -> None:
         assert _extract_code({}) is None
+
+
+# ---------------------------------------------------------------------------
+# Additional grounding edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestGroundingCheckMalformedData:
+    @pytest.mark.asyncio
+    async def test_grounding_non_dict_list_response_returns_malformed(self):
+        """check_grounding returns malformed when fhir_read returns a list."""
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.CREATE,
+            proposed_value={},
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+            description="Need encounter",
+        )
+        client = AsyncMock()
+        client.fhir_read.return_value = []  # list instead of dict
+
+        result = await check_grounding(item, client)
+
+        assert result.passed is False
+        assert "malformed data" in result.message
+
+    @pytest.mark.asyncio
+    async def test_grounding_non_dict_string_response_returns_malformed(self):
+        """check_grounding returns malformed when fhir_read returns a string."""
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.CREATE,
+            proposed_value={},
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+            description="Need encounter",
+        )
+        client = AsyncMock()
+        client.fhir_read.return_value = "not a dict"
+
+        result = await check_grounding(item, client)
+
+        assert result.passed is False
+        assert "malformed data" in result.message
+        assert "Encounter/" in result.message
+
+    @pytest.mark.asyncio
+    async def test_grounding_non_dict_none_response_returns_malformed(self):
+        """check_grounding returns malformed when fhir_read returns None."""
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.CREATE,
+            proposed_value={},
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+            description="Need encounter",
+        )
+        client = AsyncMock()
+        client.fhir_read.return_value = None
+
+        result = await check_grounding(item, client)
+
+        assert result.passed is False
+        assert "malformed data" in result.message
+
+
+# ---------------------------------------------------------------------------
+# Conflict check exception path
+# ---------------------------------------------------------------------------
+
+
+class TestConflictCheckException:
+    @pytest.mark.asyncio
+    async def test_conflict_exception_returns_failed_with_message(self):
+        """check_conflict returns failed when fhir_read raises an exception."""
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.UPDATE,
+            proposed_value={"code": "I10"},
+            current_value={"resourceType": "Condition", "code": "E11.9"},
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+            description="Update condition",
+            target_resource_id=CONDITION_FHIR_UUID,
+        )
+        client = AsyncMock()
+        client.fhir_read.side_effect = ConnectionError("network timeout")
+
+        result = await check_conflict(item, client)
+
+        assert result.passed is False
+        assert "Failed to re-read" in result.message
+        assert "network timeout" in result.message
+
+    @pytest.mark.asyncio
+    async def test_conflict_valueerror_also_caught(self):
+        """check_conflict catches ValueError as well."""
+        item = ManifestItem(
+            resource_type="Condition",
+            action=ManifestAction.UPDATE,
+            proposed_value={"code": "I10"},
+            current_value={"resourceType": "Condition"},
+            source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+            description="Update condition",
+            target_resource_id=CONDITION_FHIR_UUID,
+        )
+        client = AsyncMock()
+        client.fhir_read.side_effect = ValueError("bad value")
+
+        result = await check_conflict(item, client)
+
+        assert result.passed is False
+        assert "Failed to re-read" in result.message
+
+
+# ---------------------------------------------------------------------------
+# _normalize_for_conflict — non-dict meta
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeForConflictEdgeCases:
+    def test_meta_not_a_dict_left_unchanged(self):
+        """When meta is a string, it should be left as-is (not processed)."""
+        resource = {
+            "id": "some-id",
+            "meta": "not-a-dict",
+            "code": "E11.9",
+        }
+        normalized = _normalize_for_conflict(resource)
+        # Non-dict meta is left unchanged
+        assert normalized["meta"] == "not-a-dict"
+        assert normalized["code"] == "E11.9"
+
+    def test_meta_is_list_left_unchanged(self):
+        """When meta is a list (malformed), it is left unchanged."""
+        resource = {
+            "id": "some-id",
+            "meta": [{"versionId": "1"}],
+        }
+        normalized = _normalize_for_conflict(resource)
+        assert normalized["meta"] == [{"versionId": "1"}]
+
+    def test_no_meta_key_unchanged(self):
+        """Resources without meta field are returned with other fields intact."""
+        resource = {"id": "abc", "code": "I10"}
+        normalized = _normalize_for_conflict(resource)
+        assert "meta" not in normalized
+        assert normalized["code"] == "I10"
+
+    def test_original_resource_not_mutated(self):
+        """_normalize_for_conflict must not mutate the original dict."""
+        resource = {
+            "id": "x",
+            "meta": {"versionId": "3", "lastUpdated": "2024-01-01"},
+        }
+        original_meta = resource["meta"].copy()
+        _normalize_for_conflict(resource)
+        # Original should still have its keys
+        assert resource["meta"] == original_meta
+
+
+# ---------------------------------------------------------------------------
+# verify_manifest — empty manifest
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyManifestEmpty:
+    @pytest.mark.asyncio
+    async def test_empty_manifest_produces_empty_results(self, mock_openemr_client):
+        """Manifest with no items produces an empty verification report."""
+        manifest = ChangeManifest(
+            patient_id=CONDITION_FHIR_UUID,
+            items=[],
+        )
+        report = await verify_manifest(manifest, mock_openemr_client)
+
+        assert report.manifest_id == manifest.id
+        assert report.results == []
+        assert report.passed is True
+        assert report.warnings == []
+
+    @pytest.mark.asyncio
+    async def test_multiple_items_produce_results_for_each(self, mock_openemr_client):
+        """Each item generates grounding, confidence, and conflict check results."""
+        items = [
+            ManifestItem(
+                resource_type="Condition",
+                action=ManifestAction.CREATE,
+                proposed_value={"code": "E11.9"},
+                source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                description="Add diabetes",
+            ),
+            ManifestItem(
+                resource_type="Condition",
+                action=ManifestAction.CREATE,
+                proposed_value={"code": "I10"},
+                source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                description="Add hypertension",
+            ),
+        ]
+        manifest = ChangeManifest(patient_id=CONDITION_FHIR_UUID, items=items)
+        report = await verify_manifest(manifest, mock_openemr_client)
+
+        # Each item produces at minimum grounding + confidence + conflict results
+        item_ids = {r.item_id for r in report.results}
+        assert item_ids == {items[0].id, items[1].id}

@@ -709,3 +709,189 @@ class TestBuildManifestEncounterId:
         )
 
         assert manifest.encounter_id == "new-encounter-id"
+
+
+# ==================================================================
+# No-manifest guard
+# ==================================================================
+
+
+class TestExecuteApprovedNoManifest:
+    @pytest.mark.asyncio
+    async def test_raises_when_no_manifest(self):
+        """execute_approved raises ValueError when session has no manifest."""
+        openemr_client = AsyncMock()
+        loop = _make_loop(openemr_client)
+        session = AgentSession()
+        # No manifest set
+
+        with pytest.raises(ValueError, match="No manifest to execute"):
+            await loop.execute_approved(session)
+
+
+# ==================================================================
+# UPDATE edge cases
+# ==================================================================
+
+
+class TestUpdateEdgeCases:
+    @pytest.mark.asyncio
+    async def test_update_with_no_target_id_fails(self):
+        """UPDATE item with no target_resource_id and no ref raises and marks failed."""
+        openemr_client = AsyncMock()
+        openemr_client.api_call.return_value = []  # pre-fetch returns empty
+
+        session = _make_session(
+            encounter_id=ENCOUNTER_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="upd-1",
+                    resource_type="Condition",
+                    action=ManifestAction.UPDATE,
+                    proposed_value={"code": "I10"},  # no "ref" key
+                    source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                    description="Update condition",
+                    status="approved",
+                    # target_resource_id not set, no "ref" in proposed_value
+                )
+            ],
+        )
+        loop = _make_loop(openemr_client)
+        result_session = await loop.execute_approved(session)
+
+        # manifest is cleared; check via message
+        messages = result_session.messages
+        last_msg = messages[-1].content
+        assert "failed" in last_msg
+
+    @pytest.mark.asyncio
+    async def test_update_pid_resource_uuid_not_in_precache_fails(self):
+        """UPDATE for PID-endpoint resource whose UUID is not in pre-cache fails."""
+        openemr_client = AsyncMock()
+        openemr_client.api_call.side_effect = [
+            [],  # pre-fetch returns nothing (MED_FHIR_UUID not in cache)
+            # No second call expected since we'll fail before PUT
+        ]
+
+        session = _make_session(
+            encounter_id=ENCOUNTER_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="upd-2",
+                    resource_type="MedicationRequest",
+                    action=ManifestAction.UPDATE,
+                    proposed_value={"ref": f"MedicationRequest/{MED_FHIR_UUID}", "dose": "1000mg"},
+                    target_resource_id=MED_FHIR_UUID,
+                    source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                    description="Update medication",
+                    status="approved",
+                )
+            ],
+        )
+        loop = _make_loop(openemr_client)
+        result_session = await loop.execute_approved(session)
+
+        last_msg = result_session.messages[-1].content
+        assert "failed" in last_msg
+
+
+# ==================================================================
+# DELETE edge cases
+# ==================================================================
+
+
+class TestDeleteEdgeCases:
+    @pytest.mark.asyncio
+    async def test_delete_with_no_target_id_fails(self):
+        """DELETE item with no target_resource_id and no ref marks item failed."""
+        openemr_client = AsyncMock()
+        openemr_client.api_call.return_value = []  # pre-fetch
+
+        session = _make_session(
+            encounter_id=ENCOUNTER_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="del-1",
+                    resource_type="Condition",
+                    action=ManifestAction.DELETE,
+                    proposed_value={},  # no ref, no target_resource_id
+                    source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                    description="Delete condition",
+                    status="approved",
+                )
+            ],
+        )
+        loop = _make_loop(openemr_client)
+        result_session = await loop.execute_approved(session)
+
+        last_msg = result_session.messages[-1].content
+        assert "failed" in last_msg
+
+
+# ==================================================================
+# Non-REST-writable resource type
+# ==================================================================
+
+
+class TestNonWritableResourceType:
+    @pytest.mark.asyncio
+    async def test_unsupported_resource_type_fails_item(self):
+        """Manifest item with unsupported resource type is marked failed."""
+        openemr_client = AsyncMock()
+        openemr_client.api_call.return_value = []  # pre-fetch
+
+        session = _make_session(
+            encounter_id=ENCOUNTER_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="bad-1",
+                    resource_type="CarePlan",  # read-only type
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "E11.9"},
+                    source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                    description="Create care plan",
+                    status="approved",
+                )
+            ],
+        )
+        loop = _make_loop(openemr_client)
+        result_session = await loop.execute_approved(session)
+
+        last_msg = result_session.messages[-1].content
+        assert "failed" in last_msg
+
+
+# ==================================================================
+# Result is not a dict (no error detection triggered)
+# ==================================================================
+
+
+class TestNonDictResult:
+    @pytest.mark.asyncio
+    async def test_list_result_does_not_trigger_error_detection(self):
+        """When api_call returns a list (not a dict), item is completed successfully."""
+        openemr_client = AsyncMock()
+        openemr_client.api_call.side_effect = [
+            [],  # pre-fetch
+            [{"id": 99}],  # POST result (list — happens with some OpenEMR endpoints)
+        ]
+
+        session = _make_session(
+            encounter_id=ENCOUNTER_FHIR_UUID,
+            items=[
+                ManifestItem(
+                    id="list-result-1",
+                    resource_type="Condition",
+                    action=ManifestAction.CREATE,
+                    proposed_value={"code": "E11.9"},
+                    source_reference=f"Encounter/{ENCOUNTER_FHIR_UUID}",
+                    description="Add diabetes",
+                    status="approved",
+                )
+            ],
+        )
+        loop = _make_loop(openemr_client)
+        result_session = await loop.execute_approved(session)
+
+        last_msg = result_session.messages[-1].content
+        assert "1 succeeded" in last_msg
