@@ -677,7 +677,12 @@ class SidebarApp {
 
     const markdown = document.createElement("div")
     markdown.className = "markdown"
-    markdown.innerHTML = this.renderMarkdown(displayContent)
+    if (role === "user") {
+      // User messages: plain text only — no HTML rendering to prevent injection
+      markdown.textContent = displayContent
+    } else {
+      markdown.innerHTML = this.renderMarkdown(displayContent)
+    }
     block.appendChild(markdown)
 
     if (metadata) {
