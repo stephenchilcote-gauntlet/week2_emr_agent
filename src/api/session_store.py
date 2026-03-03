@@ -4,6 +4,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import json as _json
+
 from pydantic import ValidationError
 
 from ..agent.models import AgentSession
@@ -95,7 +97,7 @@ class SessionStore:
             return None
         try:
             session = self._decode_session_payload(row[0])
-        except ValidationError:
+        except (ValidationError, _json.JSONDecodeError):
             return None
         self._cache[session.id] = session
         return session
@@ -118,7 +120,7 @@ class SessionStore:
         for row in rows:
             try:
                 sessions.append(self._decode_session_payload(row[0]))
-            except ValidationError:
+            except (ValidationError, _json.JSONDecodeError):
                 continue
         for session in sessions:
             self._cache[session.id] = session

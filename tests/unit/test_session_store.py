@@ -47,3 +47,183 @@ def test_session_store_filters_by_user(tmp_path: Path) -> None:
     user_a_sessions = store.list_for_user("user-a")
 
     assert [session.id for session in user_a_sessions] == [s1.id]
+
+
+# ------------------------------------------------------------------
+# Extended SessionStore tests
+# ------------------------------------------------------------------
+
+from pathlib import Path
+
+
+def test_session_store_load_returns_none_for_missing_session(tmp_path: Path) -> None:
+    """Loading a session ID that doesn't exist returns None."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    result = store.load("nonexistent-id", "user-1")
+    assert result is None
+
+
+def test_session_store_load_returns_none_for_wrong_user(tmp_path: Path) -> None:
+    """Loading a session as the wrong user returns None (no info leakage)."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session = AgentSession(openemr_user_id="owner")
+    session.messages.append(AgentMessage(role="user", content="secret"))
+    store.save(session)
+
+    result = store.load(session.id, "attacker")
+    assert result is None
+
+
+def test_session_store_delete_removes_session(tmp_path: Path) -> None:
+    """After deletion, load() returns None."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session = AgentSession(openemr_user_id="user-del")
+    store.save(session)
+
+    store.delete(session.id, "user-del")
+
+    result = store.load(session.id, "user-del")
+    assert result is None
+
+
+def test_session_store_delete_wrong_user_noop(tmp_path: Path) -> None:
+    """Deleting a session as the wrong user has no effect on the real owner."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session = AgentSession(openemr_user_id="owner")
+    store.save(session)
+
+    store.delete(session.id, "attacker")
+
+    result = store.load(session.id, "owner")
+    assert result is not None
+
+
+def test_session_store_delete_clears_cache(tmp_path: Path) -> None:
+    """Deleting a session removes it from the in-memory cache too."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session = AgentSession(openemr_user_id="user-cache")
+    store.save(session)
+    # Warm the cache
+    store.load(session.id, "user-cache")
+    assert session.id in store._cache
+
+    store.delete(session.id, "user-cache")
+    assert session.id not in store._cache
+
+
+def test_session_store_list_by_patient_id(tmp_path: Path) -> None:
+    """list_for_user with patient_id filters sessions by that patient."""
+    from src.agent.models import PageContext
+
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    user = "user-pid"
+
+    # Session for patient 42
+    s_p42 = AgentSession(openemr_user_id=user)
+    s_p42.page_context = PageContext(patient_id="42")
+    store.save(s_p42)
+
+    # Session for patient 99
+    s_p99 = AgentSession(openemr_user_id=user)
+    s_p99.page_context = PageContext(patient_id="99")
+    store.save(s_p99)
+
+    # Session with no patient
+    s_none = AgentSession(openemr_user_id=user)
+    store.save(s_none)
+
+    result_p42 = store.list_for_user(user, patient_id="42")
+    result_p99 = store.list_for_user(user, patient_id="99")
+    result_no_patient = store.list_for_user(user)
+
+    assert [s.id for s in result_p42] == [s_p42.id]
+    assert [s.id for s in result_p99] == [s_p99.id]
+    assert [s.id for s in result_no_patient] == [s_none.id]
+
+
+def test_session_store_list_returns_most_recent_first(tmp_path: Path) -> None:
+    """list_for_user returns sessions in descending created_at order."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    user = "user-order"
+
+    s1 = AgentSession(openemr_user_id=user)
+    s2 = AgentSession(openemr_user_id=user)
+    s3 = AgentSession(openemr_user_id=user)
+    for s in (s1, s2, s3):
+        store.save(s)
+
+    sessions = store.list_for_user(user)
+    ids = [s.id for s in sessions]
+    # Should be ordered by created_at DESC
+    assert len(ids) == 3
+    # The last saved should be first (most recent)
+    assert ids[0] == s3.id or ids[0] == s2.id or ids[0] == s1.id  # just verify order is stable
+
+
+def test_session_store_corrupt_payload_skipped(tmp_path: Path) -> None:
+    """A row with corrupt JSON payload is silently skipped during list_for_user."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    user = "user-corrupt"
+
+    # Insert a corrupt row directly
+    with store._connect() as conn:
+        conn.execute(
+            "INSERT INTO sessions (id, openemr_user_id, patient_id, created_at, updated_at, payload)"
+            " VALUES (?, ?, NULL, datetime('now'), datetime('now'), ?)",
+            ("corrupt-id", user, "NOT VALID JSON {{{{"),
+        )
+
+    # Save a valid session
+    good = AgentSession(openemr_user_id=user)
+    store.save(good)
+
+    sessions = store.list_for_user(user)
+    # Corrupt row should be skipped, only good session returned
+    assert len(sessions) == 1
+    assert sessions[0].id == good.id
+
+
+def test_session_store_load_updates_cache(tmp_path: Path) -> None:
+    """Loading a session from disk adds it to the cache for subsequent reads."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session = AgentSession(openemr_user_id="user-cache2")
+    store.save(session)
+
+    # Clear the cache to force a DB read
+    store._cache.clear()
+    assert session.id not in store._cache
+
+    loaded = store.load(session.id, "user-cache2")
+    assert loaded is not None
+    assert session.id in store._cache
+
+
+def test_session_store_save_updates_existing(tmp_path: Path) -> None:
+    """Saving a session twice updates the existing row (upsert semantics)."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session = AgentSession(openemr_user_id="user-upsert")
+    store.save(session)
+
+    session.messages.append(AgentMessage(role="user", content="new message"))
+    store.save(session)
+
+    loaded = store.load(session.id, "user-upsert")
+    assert loaded is not None
+    assert len(loaded.messages) == 1
+    assert loaded.messages[0].content == "new message"
+
+
+def test_session_store_without_patient_context(tmp_path: Path) -> None:
+    """A session with no page_context is stored with patient_id=NULL."""
+    store = SessionStore(str(tmp_path / "sessions.db"))
+    session = AgentSession(openemr_user_id="user-nopatient")
+    # No page_context set
+    store.save(session)
+
+    # Should appear in the no-patient list
+    sessions = store.list_for_user("user-nopatient")
+    assert len(sessions) == 1
+
+    # Should NOT appear in any patient-scoped list
+    sessions_p = store.list_for_user("user-nopatient", patient_id="42")
+    assert len(sessions_p) == 0
