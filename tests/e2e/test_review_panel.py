@@ -139,11 +139,28 @@ class TestTourModeRendering:
     def test_card_has_confidence_badge(
         self, review_session: tuple[Page, Frame, int],
     ) -> None:
+        """Confidence badge renders for non-high confidence items.
+
+        High confidence items intentionally show no badge (no false alarm).
+        We inject 'medium' confidence via the app state and re-render to
+        verify the badge appears correctly for lower-confidence items.
+        """
         _page, sidebar, _total = review_session
+        # Inject medium confidence onto the first item and re-render
+        injected = sidebar.evaluate("""() => {
+            const app = window.__sidebarApp
+            if (!app || !app.state.pendingManifest ||
+                    !app.state.pendingManifest.items.length) return false
+            app.state.pendingManifest.items[0].confidence = 'medium'
+            app.renderReviewPanel()
+            return true
+        }""")
+        assert injected, "Could not inject confidence — __sidebarApp not ready"
         badge = sidebar.locator(".confidence-badge")
         expect(badge).to_be_visible()
-        text = badge.inner_text().lower()
-        assert text in ("high", "medium", "low"), f"Unexpected confidence: {text!r}"
+        assert badge.inner_text() == "Review suggested", (
+            f"Unexpected badge text: {badge.inner_text()!r}"
+        )
 
     def test_card_shows_pending_status(
         self, review_session: tuple[Page, Frame, int],
