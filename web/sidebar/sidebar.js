@@ -1290,10 +1290,12 @@ class SidebarApp {
     this.el.charCounter.classList.toggle("hidden", !show)
     const overLimit = count > MAX_CHARS
     this.el.chatInput.classList.toggle("over-limit", overLimit)
-    this.el.sendButton.disabled = overLimit || this.el.sendButton.disabled
+    // Use tracked _sendInFlight flag (set by toggleSend) so that reducing the
+    // message below the limit correctly re-enables the button.
+    this.el.sendButton.disabled = overLimit || (this._sendInFlight === true)
     this.el.sendButton.title = overLimit
       ? "Message too long — shorten to under 8,000 characters."
-      : ""
+      : (this._sendInFlight ? "Waiting for the assistant to finish." : "")
   }
 
   setStatus(state) {
@@ -1310,6 +1312,7 @@ class SidebarApp {
   }
 
   toggleSend(enabled) {
+    this._sendInFlight = !enabled
     const overLimit = this.el.chatInput.value.length > MAX_CHARS
     this.el.sendButton.disabled = !enabled || overLimit
     if (!enabled) {
